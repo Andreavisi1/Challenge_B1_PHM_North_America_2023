@@ -1,0 +1,69 @@
+PHM 2023 CHALLENGE - FEATURE ANALYSIS REPORT
+==================================================
+
+Dataset Overview:
+- Total samples: 2016
+- Total features: 94
+- Health levels: [np.int64(0), np.int64(1), np.int64(2), np.int64(3), np.int64(4), np.int64(6), np.int64(8)]
+- Operating conditions: 78
+
+Feature Categories:
+- Time Domain: 19 features
+  * horizontal_peak (corr: 0.045)
+  * horizontal_skewness (corr: 0.065)
+  * horizontal_kurtosis (corr: 0.286)
+  * axial_rms (corr: 0.076)
+  * axial_peak (corr: 0.022)
+  ... and 14 more
+
+- Frequency Domain: 46 features
+  * horizontal_spectral_centroid (corr: 0.118)
+  * horizontal_spectral_rolloff (corr: 0.110)
+  * horizontal_spectral_flatness (corr: 0.044)
+  * horizontal_spectral_spread (corr: 0.126)
+  * horizontal_mid_freq_power (corr: 0.023)
+  ... and 41 more
+
+- Gear Specific: 11 features
+  * horizontal_gmf_harmonic_2_power (corr: 0.036)
+  * horizontal_gmf_harmonic_3_power (corr: 0.021)
+  * axial_gmf_harmonic_2_power (corr: 0.049)
+  * axial_gmf_harmonic_3_power (corr: 0.013)
+  * vertical_gmf_power (corr: 0.116)
+  ... and 6 more
+
+- Multi-Channel: 20 features
+  * horizontal_mid_freq_ratio (corr: 0.124)
+  * horizontal_high_freq_ratio (corr: 0.018)
+  * axial_mid_freq_ratio (corr: 0.184)
+  * axial_high_freq_ratio (corr: 0.035)
+  * vertical_mid_freq_ratio (corr: 0.142)
+  ... and 15 more
+
+- Normalized: 12 features
+  * horizontal_total_power_norm_rpm (corr: 0.035)
+  * axial_rms_norm_rpm (corr: 0.135)
+  * axial_peak_norm_rpm (corr: 0.010)
+  * axial_total_power_norm_rpm (corr: 0.101)
+  * axial_dominant_power_norm_rpm (corr: 0.114)
+  ... and 7 more
+
+- Physics-Based: 14 features
+  * horizontal_gmf_harmonic_2_power (corr: 0.036)
+  * horizontal_gmf_harmonic_3_power (corr: 0.021)
+  * horizontal_sideband_power (corr: 0.073)
+  * axial_gmf_harmonic_2_power (corr: 0.049)
+  * axial_gmf_harmonic_3_power (corr: 0.013)
+  ... and 9 more
+
+Top 10 Features by Health Level Correlation:
+ 1. axial_clearance_factor                             0.3901
+ 2. axial_kurtosis                                     0.3727
+ 3. axial_shape_factor                                 0.2996
+ 4. horizontal_impulse_factor                          0.2952
+ 5. vertical_kurtosis                                  0.2934
+ 6. horizontal_kurtosis                                0.2857
+ 7. vertical_clearance_factor                          0.2760
+ 8. vertical_shape_factor                              0.2374
+ 9. horizontal_shape_factor                            0.2149
+10. energy_ratio_horizontal                            0.1981
