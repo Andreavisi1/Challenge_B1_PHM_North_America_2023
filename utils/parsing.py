@@ -62,6 +62,9 @@ def parse_vibration_dataset(dataset_path):
         print(f"Health levels disponibili: {sorted(df['health_level'].unique())}")
         print(f"Condizioni operative (rpm): {sorted(df['velocita'].unique())}")
         print(f"Condizioni operative (torque): {sorted(df['torque'].unique())}")
+
+        df.to_pickle('../data/processed/train_data.pkl')
+        
     return df
 
 def parse_test_dataset(dataset_path):
@@ -86,4 +89,7 @@ def parse_test_dataset(dataset_path):
         print(f"Dataset caricato: {len(df)} file processati")
         print(f"Condizioni operative (rpm): {sorted(df['velocita'].unique())}")
         print(f"Condizioni operative (torque): {sorted(df['torque'].unique())}")
+
+        df.to_pickle('../data/processed/test_data.pkl')
+
     return df
