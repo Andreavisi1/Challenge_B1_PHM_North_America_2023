@@ -1,0 +1,26 @@
+PHM 2023 - FEATURE SELECTION REPORT
+==================================================
+
+Features finali: 20
+
+Features selezionate:
+  - ipi_cv
+  - v_sq
+  - ipi_std
+  - corr_yz
+  - az_band_1000_2000
+  - ax_ptp
+  - ay_band_0_200
+  - ay_band_1000_2000
+  - ax_band_2000_4000
+  - ay_iqr
+  - ay_band_200_500
+  - ay_ptp
+  - ax_skew
+  - az_band_500_1000
+  - az_band_4000_8000
+  - az_median
+  - ay_median
+  - az_band_0_200
+  - t_over_rpm
+  - ay_band_500_1000
