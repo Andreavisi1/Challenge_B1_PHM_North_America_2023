@@ -494,3 +494,18 @@ class TestingClass:
             conf_thresh=conf_thresh,
             ordinal_smooth=ordinal_smooth,
         )
+
+'''Riassuntino operativo (in ordine)
+
+Il modello produce probabilità sulle classi viste ⇒ si espandono a 10.
+
+Si calcola la confidence ordinale iniziale.
+
+Si addestrano IsolationForest per 4/6/8 (sul training, scalato).
+
+Sul test, per i casi predetti 4/6/8 e giudicati anomali, si sposta una quota di probabilità a 5/7/9/10 in modo guidato.
+
+Si applica lo smoothing ordinale (ammorbidisce verso i vicini).
+
+Si ricalcola la confidence finale (mix di ordinale, entropia, max prob, originale) e si binarizza con conf_thresh.
+'''
