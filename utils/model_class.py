@@ -22,7 +22,7 @@ from sklearn.model_selection import (
     RandomizedSearchCV, cross_val_score, StratifiedKFold
 )
 from sklearn.metrics import (
-    accuracy_score, balanced_accuracy_score, f1_score,
+    ConfusionMatrixDisplay, accuracy_score, balanced_accuracy_score, f1_score,
     confusion_matrix, classification_report, roc_auc_score
 )
 from sklearn.inspection import permutation_importance
@@ -378,22 +378,76 @@ class ModelSelectorClassification:
         }
     
     def evaluate_all(self, X_val, y_val):
-        """Valuta tutti i modelli su validation set."""
-        # <<< NEW: memorizzo l'ultimo validation set, utile per il salvataggio degli ensemble
+        """Valuta tutti i modelli su validation set e mostra le confusion matrix."""
         self._last_X_val = X_val
         self._last_y_val = y_val
-        # >>>
 
         print("\n" + "=" * 60)
         print("VALUTAZIONE SU VALIDATION - TUTTI I MODELLI")
         print("=" * 60)
 
         self.val_results = []
+        self.conf_matrices = {}  
+
+        # Ordine/etichette di classe coerenti
+        if hasattr(self, "classes_") and self.classes_ is not None:
+            classes = list(self.classes_)
+        else:
+            # Se non definito altrove, inferisco dalle y di validation
+            classes = list(np.unique(y_val))
+
         for name, search in self.searches.items():
-            res = self.evaluate(search.best_estimator_, X_val, y_val, name,
-                            print_cm=False, print_report=False)
+            est = search.best_estimator_
+
+            
+            res = self.evaluate(est, X_val, y_val, name, print_cm=False, print_report=False)
             self.val_results.append(res)
-        
+
+            try:
+                y_pred = est.predict(X_val)
+            except Exception as e:
+                print(f"[{name}] Impossibile calcolare predizioni per CM: {e}")
+                continue
+
+            cm_raw = confusion_matrix(y_val, y_pred, labels=classes)
+            # Normalizzazione 'true': per riga (somma riga = 1); gestisco righe nulle
+            with np.errstate(invalid='ignore'):
+                cm_norm = cm_raw.astype(float)
+                row_sums = cm_norm.sum(axis=1, keepdims=True)
+                cm_norm = np.divide(cm_norm, row_sums, out=np.zeros_like(cm_norm, dtype=float), where=row_sums!=0)
+
+            self.conf_matrices[name] = {
+                "labels": classes,
+                "raw": cm_raw,
+                "normalized": cm_norm
+            }
+
+            # Stampa tabellare compatta
+            print(f"\n— Matrice di confusione (raw) – {name}")
+            df_raw = pd.DataFrame(cm_raw, index=[f"true_{c}" for c in classes], columns=[f"pred_{c}" for c in classes])
+            print(df_raw)
+
+            print(f"\n— Matrice di confusione (normalizzata per riga) – {name}")
+            df_norm = pd.DataFrame(cm_norm, index=[f"true_{c}" for c in classes], columns=[f"pred_{c}" for c in classes])
+            # 3 decimali per leggibilità
+            print(df_norm.round(3))
+
+            '''try:
+                import matplotlib.pyplot as plt
+                fig1 = ConfusionMatrixDisplay(cm_raw, display_labels=classes)
+                fig1.plot(values_format=".0f", xticks_rotation=45, colorbar=False)
+                plt.title(f"Confusion Matrix (raw) – {name}")
+                plt.tight_layout()
+                plt.show()
+
+                fig2 = ConfusionMatrixDisplay(cm_norm, display_labels=classes)
+                fig2.plot(values_format=".2f", xticks_rotation=45, colorbar=False)
+                plt.title(f"Confusion Matrix (norm) – {name}")
+                plt.tight_layout()
+                plt.show()
+            except Exception as _:
+                pass'''
+
         self._analyze_results()
         return self.val_results
 
