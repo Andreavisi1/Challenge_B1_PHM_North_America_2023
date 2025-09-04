@@ -40,17 +40,17 @@ class SubmissionGenerator:
         H = -(probs * np.log(probs + eps)).sum(1)
         H /= np.log(probs.shape[1])
         H = 1 - H  # high=confident
-        # (2) varianza ordinale (già tua)
+        # (2) varianza ordinale
         ord_conf = self.ordinal_confidence(probs)
         # (3) anomalia (invertita)
-        if anomaly is None: anomaly_comp = np.ones_like(H)
+        if anomaly is None:
+            anomaly_comp = np.ones_like(H)
         else:
             a = np.clip(anomaly, 0, 1)
             anomaly_comp = 1 - a
         s = w[0]*H + w[1]*ord_conf + w[2]*anomaly_comp
         return s
 
-    
     @staticmethod
     def ordinal_confidence(probs: NDArray) -> NDArray:
         """Confidence basata su varianza ordinale."""
@@ -60,27 +60,8 @@ class SubmissionGenerator:
         max_var = ((class_values - class_values.mean())**2).mean()
         return 1 - np.sqrt(np.clip(variance / max(max_var, 1e-12), 0, 1))
     
-    def apply_smoothing(self, probs: NDArray, alpha: float = 0.05) -> NDArray:
-        if alpha <= 0: return probs
-        # kernel tri-lobato (poco smoothing)
-        kernel = np.array([alpha, 1 - 2*alpha, alpha], dtype=float)
-        out = np.empty_like(probs)
-        # bordo: replica il bordo (pad)
-        padded = np.pad(probs, ((0,0),(1,1)), mode='edge')
-        for i in range(11):
-            window = padded[:, i:i+3]
-            out[:, i] = (window * kernel).sum(axis=1)
-        out = np.clip(out, 0, None)
-        row_sums = out.sum(axis=1, keepdims=True)
-        # la competizione accetta somma ≤ 1; normalizzare a 1 va comunque bene,
-        # ma se vuoi rispettare letteralmente “≤1”, puoi contrarre di un epsilon.
-        out = np.divide(out, np.maximum(row_sums, 1e-12))
-        return out
-
-    
     def needs_model_scaling(self, model: Any) -> bool:
         """Verifica se il modello richiede scaling."""
-        # Modelli che richiedono scaling
         scaling_models = ["LogisticRegression", "RidgeClassifier", "SVC"]
         
         # Controlla se è una pipeline
@@ -124,30 +105,27 @@ class SubmissionGenerator:
             self.detectors[cls] = detector
     
     def apply_transfers(self, probs, X_test, alpha: float = 0.3) -> Dict:
-        if not hasattr(self, 'scaler') or not self.detectors: return {}
+        if not hasattr(self, 'scaler') or not self.detectors:
+            return {}
         Xs = self.scaler.transform(X_test)
         transfers = {}
         for cls, det in self.detectors.items():
             # anomalia morbida in [0,1]
             s = det.decision_function(Xs)
-            a = 1 / (1 + np.exp( (s - np.median(s)) / (np.std(s)+1e-6) ))  # sigmoid centrata
+            a = 1 / (1 + np.exp((s - np.median(s)) / (np.std(s) + 1e-6)))  # sigmoid centrata
             a = a[:, None]  # broadcast
-            moved_total = 0.0
             if cls in (4, 6):
                 dst = self.missing_map[cls]
-                alpha = alpha
                 moved = alpha * a.squeeze() * probs[:, cls]
                 probs[:, cls] -= moved
                 probs[:, dst] += moved
-                moved_total = float(moved.sum())
                 transfers[f"{cls}_to_{dst}"] = int((moved > 0).sum())
             elif cls == 8:
-                alpha = alpha + 0.1 if alpha < 0.9 else alpha
-                moved = alpha * a.squeeze() * probs[:, 8]
+                alpha_eff = (alpha + 0.1) if alpha < 0.9 else alpha
+                moved = alpha_eff * a.squeeze() * probs[:, 8]
                 probs[:, 8] -= moved
                 probs[:, 9] += 0.7 * moved
                 probs[:, 10] += 0.3 * moved
-                moved_total = float(moved.sum())
                 transfers["8_to_9_10"] = int((moved > 0).sum())
         # clamp & renorm di sicurezza
         probs[:] = np.maximum(probs, 0)
@@ -162,7 +140,6 @@ class SubmissionGenerator:
         test_ids: Sequence,
         model: Any,
         conf_thresh: float = 0.7,
-        smooth_factor: float = 0.05,
         contamination: float = 0.05,
         alpha: float = 0.3
     ) -> Tuple[pd.DataFrame, Dict]:
@@ -197,8 +174,7 @@ class SubmissionGenerator:
         self.build_anomaly_detectors(X_tr, y_tr, contamination)
         transfers = self.apply_transfers(probs_11, X_test, alpha)
         
-        # 6. Smoothing ordinale
-        probs_final = self.apply_smoothing(probs_11, smooth_factor)
+        probs_final = probs_11
         
         # 7. Confidence finale
         confidence = self.confidence_score(probs_final)
@@ -228,12 +204,11 @@ class SubmissionGenerator:
         X_test: NDArray,
         test_df: pd.DataFrame,
         model: Any,
-        conf_thresh: float = 0.7,      
-        smooth_factor: float = 0.05,    
-        contamination: float = 0.05 ,
+        conf_thresh: float = 0.7,
+        contamination: float = 0.05,
         alpha: float = 0.3
     ) -> Tuple[pd.DataFrame, Dict]:
         """Wrapper semplificato."""
         return self.generate_submission(
-            X_tr, y_tr, X_test, test_df["id"].values, model, conf_thresh, smooth_factor, contamination, alpha
+            X_tr, y_tr, X_test, test_df["id"].values, model, conf_thresh, contamination, alpha
         )
