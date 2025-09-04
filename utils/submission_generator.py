@@ -33,7 +33,23 @@ class SubmissionGenerator:
         out = np.zeros((proba_seen.shape[0], 11))
         out[:, col_labels.astype(int)] = proba_seen
         return out
-        
+    
+    def confidence_score(self, probs, anomaly=None, w=(0.5, 0.3, 0.2)):
+        # (1) entropia normalizzata
+        eps = 1e-12
+        H = -(probs * np.log(probs + eps)).sum(1)
+        H /= np.log(probs.shape[1])
+        H = 1 - H  # high=confident
+        # (2) varianza ordinale (già tua)
+        ord_conf = self.ordinal_confidence(probs)
+        # (3) anomalia (invertita)
+        if anomaly is None: anomaly_comp = np.ones_like(H)
+        else:
+            a = np.clip(anomaly, 0, 1)
+            anomaly_comp = 1 - a
+        s = w[0]*H + w[1]*ord_conf + w[2]*anomaly_comp
+        return s
+
     
     @staticmethod
     def ordinal_confidence(probs: NDArray) -> NDArray:
@@ -44,30 +60,23 @@ class SubmissionGenerator:
         max_var = ((class_values - class_values.mean())**2).mean()
         return 1 - np.sqrt(np.clip(variance / max(max_var, 1e-12), 0, 1))
     
-    def apply_smoothing(self, probs: NDArray, factor: float = 0.05) -> NDArray:
-        """Smoothing ordinale tra classi adiacenti."""
-        if factor <= 0:
-            return probs
-            
-        smooth = probs.copy()
-        for i in range(1, 10):  # classi interne
-            transfer = factor * probs[:, i] * 0.1
-            smooth[:, i] -= 2 * transfer
-            smooth[:, i-1] += transfer
-            smooth[:, i+1] += transfer
-        
-        # estremi
-        t0 = factor * probs[:, 0] * 0.1
-        smooth[:, 0] -= t0
-        smooth[:, 1] += t0
-        
-        t10 = factor * probs[:, 10] * 0.1
-        smooth[:, 10] -= t10
-        smooth[:, 9] += t10
-        
-        # normalizza
-        smooth = np.maximum(smooth, 0)
-        return smooth / smooth.sum(axis=1, keepdims=True)
+    def apply_smoothing(self, probs: NDArray, alpha: float = 0.05) -> NDArray:
+        if alpha <= 0: return probs
+        # kernel tri-lobato (poco smoothing)
+        kernel = np.array([alpha, 1 - 2*alpha, alpha], dtype=float)
+        out = np.empty_like(probs)
+        # bordo: replica il bordo (pad)
+        padded = np.pad(probs, ((0,0),(1,1)), mode='edge')
+        for i in range(11):
+            window = padded[:, i:i+3]
+            out[:, i] = (window * kernel).sum(axis=1)
+        out = np.clip(out, 0, None)
+        row_sums = out.sum(axis=1, keepdims=True)
+        # la competizione accetta somma ≤ 1; normalizzare a 1 va comunque bene,
+        # ma se vuoi rispettare letteralmente “≤1”, puoi contrarre di un epsilon.
+        out = np.divide(out, np.maximum(row_sums, 1e-12))
+        return out
+
     
     def needs_model_scaling(self, model: Any) -> bool:
         """Verifica se il modello richiede scaling."""
@@ -114,47 +123,35 @@ class SubmissionGenerator:
             
             self.detectors[cls] = detector
     
-    def apply_transfers(self, probs: NDArray, y_pred: NDArray, X_test: NDArray) -> Dict:
-        """Applica trasferimenti basati su anomalie."""
-        if not hasattr(self, 'scaler') or not self.detectors:
-            return {}
-            
-        X_test_scaled = self.scaler.transform(X_test)
+    def apply_transfers(self, probs, X_test):
+        if not hasattr(self, 'scaler') or not self.detectors: return {}
+        Xs = self.scaler.transform(X_test)
         transfers = {}
-        
-        for cls, detector in self.detectors.items():
-            mask_pred = (y_pred == cls)
-            if not np.any(mask_pred):
-                continue
-                
-            # rileva anomalie
-            scores = detector.decision_function(X_test_scaled[mask_pred])
-            anomalies = scores < 0  # soglia semplice
-            
-            if not np.any(anomalies):
-                continue
-                
-            idx_anom = np.where(mask_pred)[0][anomalies]
-            
-            # trasferimenti semplificati
-            if cls in [4, 6]:
-                # 4->5, 6->7
+        for cls, det in self.detectors.items():
+            # anomalia morbida in [0,1]
+            s = det.decision_function(Xs)
+            a = 1 / (1 + np.exp( (s - np.median(s)) / (np.std(s)+1e-6) ))  # sigmoid centrata
+            a = a[:, None]  # broadcast
+            moved_total = 0.0
+            if cls in (4, 6):
                 dst = self.missing_map[cls]
-                alpha = 0.3  # trasferimento fisso
-                moved = alpha * probs[idx_anom, cls]
-                probs[idx_anom, cls] -= moved
-                probs[idx_anom, dst] += moved
-                transfers[f"{cls}_to_{dst}"] = len(idx_anom)
-                
+                alpha = 0.3
+                moved = alpha * a.squeeze() * probs[:, cls]
+                probs[:, cls] -= moved
+                probs[:, dst] += moved
+                moved_total = float(moved.sum())
+                transfers[f"{cls}_to_{dst}"] = int((moved > 0).sum())
             elif cls == 8:
-                # 8->9,10 (split 70-30)
                 alpha = 0.4
-                moved = alpha * probs[idx_anom, cls]
-                probs[idx_anom, cls] -= moved
-                probs[idx_anom, 9] += 0.7 * moved
-                probs[idx_anom, 10] += 0.3 * moved
-                transfers["8_to_9_10"] = len(idx_anom)
-        
+                moved = alpha * a.squeeze() * probs[:, 8]
+                probs[:, 8] -= moved
+                probs[:, 9] += 0.7 * moved
+                probs[:, 10] += 0.3 * moved
+                moved_total = float(moved.sum())
+                transfers["8_to_9_10"] = int((moved > 0).sum())
+        # clamp & renorm di sicurezza
+        probs[:] = np.maximum(probs, 0)
+        probs[:] = probs / np.maximum(probs.sum(axis=1, keepdims=True), 1e-12)
         return transfers
     
     def generate_submission(
@@ -197,13 +194,13 @@ class SubmissionGenerator:
         
         # 5. Costruisci detector e applica trasferimenti
         self.build_anomaly_detectors(X_tr, y_tr, contamination)
-        transfers = self.apply_transfers(probs_11, y_pred_real, X_test)
+        transfers = self.apply_transfers(probs_11, X_test)
         
         # 6. Smoothing ordinale
         probs_final = self.apply_smoothing(probs_11, smooth_factor)
         
         # 7. Confidence finale
-        confidence = self.ordinal_confidence(probs_final)
+        confidence = self.confidence_score(probs_final)
         
         # 8. Crea DataFrame
         cols = [f"prob_{i}" for i in range(11)]
