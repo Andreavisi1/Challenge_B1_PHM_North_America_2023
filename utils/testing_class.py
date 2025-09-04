@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field,replace
 from typing import Any, Callable, Dict, Iterable, Mapping, Sequence, Tuple
 
 import numpy as np
@@ -130,15 +130,7 @@ class TestingClass:
         max_var = ((class_values - class_values.mean()) ** 2).mean()
         max_var = float(max(max_var, 1e-12))
         return 1 - np.sqrt(np.clip(variance / max_var, 0.0, 1.0))
-    
-    def adaptive_contamination(self, y_class: NDArray[np.int_]) -> float:
-        """Contamination adattiva basata sulla numerosità della classe."""
-        n = int(len(y_class))
-        if n < 20:
-            return min(0.15, self.config.contamination * 3)
-        if n < 50:
-            return min(0.10, self.config.contamination * 2)
-        return self.config.contamination
+
     
     @staticmethod
     def apply_ordinal_smoothing(probs: NDArray[np.floating], smooth_factor: float) -> NDArray[np.floating]:
@@ -196,7 +188,7 @@ class TestingClass:
             if len(Xb) == 0:
                 continue
 
-            cont = self.adaptive_contamination(y_tr[mask_b])
+            cont = self.config.contamination
             n_est = int(max(100, min(500, len(Xb) * 4)))
 
             det = IsolationForest(
@@ -483,8 +475,10 @@ class TestingClass:
         best_model: Any,
         conf_thresh: float = 0.25,
         ordinal_smooth: float = 0.03,
+        contamination: float = 0.05
     ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
         """Wrapper semplificato per uso comune."""
+        self.config = replace(self.config, contamination=contamination)
         return self.generate_submission(
             X_tr=X_tr,
             y_tr=y_tr,
