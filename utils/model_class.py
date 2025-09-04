@@ -570,7 +570,7 @@ class ModelSelectorClassification:
         else:
             raise ValueError("Esegui prima evaluate_all()")
     
-    def save_model(self, model=None, model_name=None, additional_metadata=None):
+    def save_model(self, model=None, model_name=None):
         """Salva il modello (anche ensemble) con metadati robusti."""
         # 1) Sorgente del modello e del nome
         if model is None:
@@ -600,99 +600,7 @@ class ModelSelectorClassification:
         joblib.dump(model, model_filename)
         print(f"Modello salvato con joblib in: {model_filename}")
 
-        # 4) Recupero/Calcolo metriche di validation
-        #    - Se il modello è tra i risultati di validation, uso quelle metriche
-        #    - Altrimenti, se ho l'ultimo validation set, ricalcolo le metriche al volo
-        metrics = {
-            'accuracy': None,
-            'balanced_accuracy': None,
-            'f1_macro': None,
-            'f1_weighted': None,
-            'auc': None
-        }
-
-        val_name_list = [r['name'] for r in getattr(self, 'val_results', [])] if getattr(self, 'val_results', None) else []
-        if model_name in val_name_list:
-            best_val_result = next(r for r in self.val_results if r['name'] == model_name)
-            metrics.update({
-                'accuracy': best_val_result['accuracy'],
-                'balanced_accuracy': best_val_result['balanced_accuracy'],
-                'f1_macro': best_val_result['f1_macro'],
-                'f1_weighted': best_val_result['f1_weighted'],
-                'auc': best_val_result['auc'],
-            })
-        else:
-            # Provo a calcolarle se ho memorizzato X_val / y_val
-            if hasattr(self, '_last_X_val') and hasattr(self, '_last_y_val') and self._last_X_val is not None:
-                try:
-                    tmp_res = self.evaluate(model, self._last_X_val, self._last_y_val,
-                                            model_name, print_cm=False, print_report=False)
-                    metrics.update({
-                        'accuracy': tmp_res['accuracy'],
-                        'balanced_accuracy': tmp_res['balanced_accuracy'],
-                        'f1_macro': tmp_res['f1_macro'],
-                        'f1_weighted': tmp_res['f1_weighted'],
-                        'auc': tmp_res['auc'],
-                    })
-                except Exception as e:
-                    print(f"Attenzione: non sono riuscito a calcolare le metriche sul validation set per {model_name}. Motivo: {e}")
-
-        # 5) Parametri / descrizione best_params
-        #    - Per i modelli “semplici” salvo best_params dalla RandomizedSearch
-        #    - Per gli ensemble salvo elenco dei componenti, i loro parametri e il tipo di voting
-        best_params = None
-        if not is_ensemble:
-            if hasattr(self, 'searches') and model_name in self.searches:
-                try:
-                    best_params = self.searches[model_name].best_params_
-                except Exception:
-                    # potrebbe essere un modello passato esternamente
-                    if hasattr(model, 'get_params'):
-                        best_params = model.get_params()
-            else:
-                if hasattr(model, 'get_params'):
-                    best_params = model.get_params()
-        else:
-            # Estraggo i componenti dell’ensemble
-            ensemble_info = {
-                'voting': getattr(model, 'voting', None),
-                'weights': getattr(model, 'weights', None),
-                'flatten_transform': getattr(model, 'flatten_transform', None),
-                'estimators': []
-            }
-            for alias, est in getattr(model, 'estimators', []):
-                est_params = est.get_params() if hasattr(est, 'get_params') else {}
-                ensemble_info['estimators'].append({
-                    'alias': alias,
-                    'class': type(est).__name__,
-                    'params': est_params
-                })
-            best_params = ensemble_info
-
-        # 6) Metadati finali
-        metadata = {
-            'model_name': model_name,
-            'is_ensemble': is_ensemble,
-            'scoring': self.scoring,
-            'accuracy': metrics['accuracy'],
-            'balanced_accuracy': metrics['balanced_accuracy'],
-            'f1_macro': metrics['f1_macro'],
-            'f1_weighted': metrics['f1_weighted'],
-            'auc': metrics['auc'],
-            'timestamp': timestamp,
-            'best_params': best_params,
-            'classes': self.le.classes_.tolist() if hasattr(self.le, 'classes_') else None
-        }
-
-        if additional_metadata:
-            metadata.update(additional_metadata)
-
-        metadata_filename = f'models/best_model_classification_metadata_{model_name}_{timestamp}.json'
-        with open(metadata_filename, 'w') as f:
-            json.dump(metadata, f, indent=2)
-        print(f"Metadati salvati in: {metadata_filename}")
-
-        return model_filename, metadata_filename
+        return model_filename
 
     
     def load_model(self, model_path, metadata_path=None):
