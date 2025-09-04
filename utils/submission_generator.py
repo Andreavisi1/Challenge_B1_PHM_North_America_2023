@@ -123,7 +123,7 @@ class SubmissionGenerator:
             
             self.detectors[cls] = detector
     
-    def apply_transfers(self, probs, X_test):
+    def apply_transfers(self, probs, X_test, alpha: float = 0.3) -> Dict:
         if not hasattr(self, 'scaler') or not self.detectors: return {}
         Xs = self.scaler.transform(X_test)
         transfers = {}
@@ -135,14 +135,14 @@ class SubmissionGenerator:
             moved_total = 0.0
             if cls in (4, 6):
                 dst = self.missing_map[cls]
-                alpha = 0.3
+                alpha = alpha
                 moved = alpha * a.squeeze() * probs[:, cls]
                 probs[:, cls] -= moved
                 probs[:, dst] += moved
                 moved_total = float(moved.sum())
                 transfers[f"{cls}_to_{dst}"] = int((moved > 0).sum())
             elif cls == 8:
-                alpha = 0.4
+                alpha = alpha + 0.1 if alpha < 0.9 else alpha
                 moved = alpha * a.squeeze() * probs[:, 8]
                 probs[:, 8] -= moved
                 probs[:, 9] += 0.7 * moved
@@ -163,7 +163,8 @@ class SubmissionGenerator:
         model: Any,
         conf_thresh: float = 0.7,
         smooth_factor: float = 0.05,
-        contamination: float = 0.05
+        contamination: float = 0.05,
+        alpha: float = 0.3
     ) -> Tuple[pd.DataFrame, Dict]:
         """Genera submission con gestione anomalie."""
         
@@ -194,7 +195,7 @@ class SubmissionGenerator:
         
         # 5. Costruisci detector e applica trasferimenti
         self.build_anomaly_detectors(X_tr, y_tr, contamination)
-        transfers = self.apply_transfers(probs_11, X_test)
+        transfers = self.apply_transfers(probs_11, X_test, alpha)
         
         # 6. Smoothing ordinale
         probs_final = self.apply_smoothing(probs_11, smooth_factor)
@@ -229,9 +230,10 @@ class SubmissionGenerator:
         model: Any,
         conf_thresh: float = 0.7,      
         smooth_factor: float = 0.05,    
-        contamination: float = 0.05 
+        contamination: float = 0.05 ,
+        alpha: float = 0.3
     ) -> Tuple[pd.DataFrame, Dict]:
         """Wrapper semplificato."""
         return self.generate_submission(
-            X_tr, y_tr, X_test, test_df["id"].values, model, conf_thresh, smooth_factor, contamination
+            X_tr, y_tr, X_test, test_df["id"].values, model, conf_thresh, smooth_factor, contamination, alpha
         )
