@@ -46,8 +46,7 @@ class SubmissionGenerator:
         if anomaly is None:
             anomaly_comp = np.ones_like(H)
         else:
-            a = np.clip(anomaly, 0, 1)
-            anomaly_comp = 1 - a
+            anomaly_comp = 1 - anomaly
         s = w[0]*H + w[1]*ord_conf + w[2]*anomaly_comp
         return s
 
@@ -104,33 +103,54 @@ class SubmissionGenerator:
             
             self.detectors[cls] = detector
     
-    def apply_transfers(self, probs, X_test, alpha: float = 0.3) -> Dict:
+    def apply_transfers(self, probs, X_test, alpha: float = 0.3, return_anomaly: bool = False):
         if not hasattr(self, 'scaler') or not self.detectors:
-            return {}
+            return ({}, np.zeros(len(X_test))) if return_anomaly else {}
         Xs = self.scaler.transform(X_test)
         transfers = {}
+
+        # --- prelevo uno snapshot delle probs per il peso anomalia
+        probs_snapshot = probs.copy()
+
+        # accumulatori per l'anomalia aggregata
+        anom_num = np.zeros(len(X_test))
+        anom_den = np.zeros(len(X_test))
+
         for cls, det in self.detectors.items():
-            # anomalia morbida in [0,1]
+            # score di anomalia per TUTTI i campioni (in [0,1], alto = più anomalo)
             s = det.decision_function(Xs)
-            a = 1 / (1 + np.exp((s - np.median(s)) / (np.std(s) + 1e-6)))  # sigmoid centrata
-            a = a[:, None]  # broadcast
+            a = 1 / (1 + np.exp((s - np.median(s)) / (np.std(s) + 1e-6)))
+            # accumulo: peso = credenza su quella classe
+            w = probs_snapshot[:, cls]
+            anom_num += a * w
+            anom_den += w
+
+            # trasferimenti come prima
+            a_col = a[:, None]
             if cls in (4, 6):
                 dst = self.missing_map[cls]
-                moved = alpha * a.squeeze() * probs[:, cls]
+                moved = alpha * a * probs[:, cls]
                 probs[:, cls] -= moved
                 probs[:, dst] += moved
                 transfers[f"{cls}_to_{dst}"] = int((moved > 0).sum())
             elif cls == 8:
                 alpha_eff = (alpha + 0.1) if alpha < 0.9 else alpha
-                moved = alpha_eff * a.squeeze() * probs[:, 8]
+                moved = alpha_eff * a * probs[:, 8]
                 probs[:, 8] -= moved
                 probs[:, 9] += 0.7 * moved
                 probs[:, 10] += 0.3 * moved
                 transfers["8_to_9_10"] = int((moved > 0).sum())
+
         # clamp & renorm di sicurezza
         probs[:] = np.maximum(probs, 0)
         probs[:] = probs / np.maximum(probs.sum(axis=1, keepdims=True), 1e-12)
+
+        if return_anomaly:
+            anom = np.divide(anom_num, np.maximum(anom_den, 1e-9))  # media pesata
+            anom = np.nan_to_num(anom, nan=0)                     # se den=0 → 1
+            return transfers, anom
         return transfers
+
     
     def generate_submission(
         self,
@@ -170,14 +190,20 @@ class SubmissionGenerator:
         # 4. Espandi a 11 classi
         probs_11 = self.expand_to_0_10(proba_seen, col_labels)
         
+
         # 5. Costruisci detector e applica trasferimenti
         self.build_anomaly_detectors(X_tr, y_tr, contamination)
-        transfers = self.apply_transfers(probs_11, X_test, alpha)
-        
+        out = self.apply_transfers(probs_11, X_test, alpha, return_anomaly=True)
+        if isinstance(out, tuple):
+            transfers, anomaly = out
+        else:
+            transfers, anomaly = out, np.zeros(len(X_test))
+
         probs_final = probs_11
-        
-        # 7. Confidence finale
-        confidence = self.confidence_score(probs_final)
+
+        # 7. Confidence finale (ORA usa anche l’anomalia)
+        confidence = self.confidence_score(probs_final, anomaly=anomaly)
+
         
         # 8. Crea DataFrame
         cols = [f"prob_{i}" for i in range(11)]
