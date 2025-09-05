@@ -8,9 +8,7 @@ FS = 20480  # Hz (dal task PHM)
 PULSES_PER_REV = 1
 TACH_COL_NAME = 'tachometer_signal'
 
-# -----------------------
-# 3) Utils
-# -----------------------
+
 def _safe_array(x):
     if isinstance(x, (list, tuple, np.ndarray, pd.Series)):
         arr = np.asarray(x, dtype=float).ravel()
@@ -111,9 +109,7 @@ def cross_axis_feats(ax, ay, az):
     feats['corr_yz'] = safe_corr(ay, az)
     return feats
 
-# -----------------------
-# 4) Espansione feature
-# -----------------------
+
 def expand_features(df, array_cols, scalar_cols):
     rows = []
     for i, row in df.iterrows():
