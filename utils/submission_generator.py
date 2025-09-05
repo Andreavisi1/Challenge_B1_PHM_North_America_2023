@@ -34,20 +34,22 @@ class SubmissionGenerator:
         out[:, col_labels.astype(int)] = proba_seen
         return out
     
-    def confidence_score(self, probs, anomaly=None, w=(0.5, 0.3, 0.2)):
-        # (1) entropia normalizzata
+    def confidence_score(self, probs: NDArray, w=(0.6, 0.4)) -> NDArray:
+        """
+        Confidence basata SOLO su:
+        (1) entropia normalizzata (alto = più confident)
+        (2) varianza ordinale (alto = più confident)
+        L'anomalia NON viene più usata.
+        """
         eps = 1e-12
+        # (1) entropia normalizzata
         H = -(probs * np.log(probs + eps)).sum(1)
         H /= np.log(probs.shape[1])
         H = 1 - H  # high=confident
         # (2) varianza ordinale
         ord_conf = self.ordinal_confidence(probs)
-        # (3) anomalia (invertita)
-        if anomaly is None:
-            anomaly_comp = np.ones_like(H)
-        else:
-            anomaly_comp = 1 - anomaly
-        s = w[0]*H + w[1]*ord_conf + w[2]*anomaly_comp
+        # combinazione
+        s = w[0] * H + w[1] * ord_conf
         return s
 
     @staticmethod
@@ -103,30 +105,34 @@ class SubmissionGenerator:
             
             self.detectors[cls] = detector
     
-    def apply_transfers(self, probs, X_test, alpha: float = 0.3, return_anomaly: bool = False):
+    def apply_transfers(self, probs: NDArray, X_test: NDArray, alpha: float = 0.3, return_anomaly: bool = False):
+        """
+        Applica i trasferimenti di probabilità basati sui detector.
+        Se return_anomaly=False (default), NON calcola l'anomalia (evita costi inutili).
+        """
         if not hasattr(self, 'scaler') or not self.detectors:
             return ({}, np.zeros(len(X_test))) if return_anomaly else {}
         Xs = self.scaler.transform(X_test)
         transfers = {}
 
-        # --- prelevo uno snapshot delle probs per il peso anomalia
-        probs_snapshot = probs.copy()
-
-        # accumulatori per l'anomalia aggregata
-        anom_num = np.zeros(len(X_test))
-        anom_den = np.zeros(len(X_test))
+        # Calcolo anomalia solo se richiesto
+        if return_anomaly:
+            probs_snapshot = probs.copy()
+            anom_num = np.zeros(len(X_test))
+            anom_den = np.zeros(len(X_test))
 
         for cls, det in self.detectors.items():
             # score di anomalia per TUTTI i campioni (in [0,1], alto = più anomalo)
             s = det.decision_function(Xs)
             a = 1 / (1 + np.exp((s - np.median(s)) / (np.std(s) + 1e-6)))
-            # accumulo: peso = credenza su quella classe
-            w = probs_snapshot[:, cls]
-            anom_num += a * w
-            anom_den += w
+
+            # accumulo solo se serve restituire l'anomalia
+            if return_anomaly:
+                w = probs_snapshot[:, cls]
+                anom_num += a * w
+                anom_den += w
 
             # trasferimenti come prima
-            a_col = a[:, None]
             if cls in (4, 6):
                 dst = self.missing_map[cls]
                 moved = alpha * a * probs[:, cls]
@@ -147,7 +153,7 @@ class SubmissionGenerator:
 
         if return_anomaly:
             anom = np.divide(anom_num, np.maximum(anom_den, 1e-9))  # media pesata
-            anom = np.nan_to_num(anom, nan=0)                     # se den=0 → 1
+            anom = np.nan_to_num(anom, nan=0)
             return transfers, anom
         return transfers
 
@@ -190,21 +196,15 @@ class SubmissionGenerator:
         # 4. Espandi a 11 classi
         probs_11 = self.expand_to_0_10(proba_seen, col_labels)
         
-
         # 5. Costruisci detector e applica trasferimenti
         self.build_anomaly_detectors(X_tr, y_tr, contamination)
-        out = self.apply_transfers(probs_11, X_test, alpha, return_anomaly=True)
-        if isinstance(out, tuple):
-            transfers, anomaly = out
-        else:
-            transfers, anomaly = out, np.zeros(len(X_test))
+        transfers = self.apply_transfers(probs_11, X_test, alpha, return_anomaly=False)
 
         probs_final = probs_11
 
-        # 7. Confidence finale (ORA usa anche l’anomalia)
-        confidence = self.confidence_score(probs_final, anomaly=anomaly)
+        # 7. Confidence finale (NON usa l’anomalia)
+        confidence = self.confidence_score(probs_final)
 
-        
         # 8. Crea DataFrame
         cols = [f"prob_{i}" for i in range(11)]
         df = pd.DataFrame(probs_final, columns=cols)
