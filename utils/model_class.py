@@ -26,6 +26,9 @@ from sklearn.metrics import (
     confusion_matrix, classification_report, roc_auc_score
 )
 from sklearn.inspection import permutation_importance
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.metrics import confusion_matrix, classification_report
 
 # Modelli di classificazione
 from sklearn.ensemble import (
@@ -646,5 +649,181 @@ class ModelSelectorClassification:
             'combined_results': self.combined_results,
             'label_encoder': self.le
         }
+    # Funzione helper per visualizzare le metriche dell'ensemble
+    def evaluate_ensemble(ensemble, X_va, y_va, plot=True):
+        """
+        Valuta l'ensemble e visualizza le metriche, gestendo anche classi non viste nel training
+        """
+        # Predizioni
+        y_pred = ensemble.predict(X_va)
+        
+        # Report testuale
+        print("\n" + "="*60)
+        print("PERFORMANCE ENSEMBLE - TOP 3 MODELLI")
+        print("="*60)
+        
+        # Ottieni tutte le classi uniche (sia true che predette)
+        all_classes = sorted(np.unique(np.concatenate([y_va, y_pred])))
+        classes_in_true = sorted(np.unique(y_va))
+        classes_in_pred = sorted(np.unique(y_pred))
+        
+        # Classi predette ma non nel validation set
+        novel_predicted = set(classes_in_pred) - set(classes_in_true)
+        # Classi nel validation ma non predette
+        missed_classes = set(classes_in_true) - set(classes_in_pred)
+        
+        print(f"\nClassi nel validation set: {classes_in_true}")
+        print(f"Classi predette dal modello: {classes_in_pred}")
+        
+        if novel_predicted:
+            print(f"⚠️  CLASSI NUOVE PREDETTE (non nel validation): {sorted(novel_predicted)}")
+        if missed_classes:
+            print(f"⚠️  CLASSI MAI PREDETTE: {sorted(missed_classes)}")
+        
+        # Classification report con labels specificati
+        try:
+            report = classification_report(y_va, y_pred, 
+                                        labels=all_classes, 
+                                        output_dict=True, 
+                                        digits=3,
+                                        zero_division=0)
+            
+            # Stampa il report standard
+            print("\n" + classification_report(y_va, y_pred, 
+                                            labels=all_classes,
+                                            digits=3,
+                                            zero_division=0))
+        except:
+            # Fallback se ci sono problemi
+            report = classification_report(y_va, y_pred, 
+                                        output_dict=True, 
+                                        digits=3,
+                                        zero_division=0)
+            print("\n" + classification_report(y_va, y_pred, digits=3, zero_division=0))
+        
+        # Estrai metriche aggregate
+        accuracy = accuracy_score(y_va, y_pred)
+        weighted_avg = report.get('weighted avg', {})
+        macro_avg = report.get('macro avg', {})
+        
+        print("\n" + "="*60)
+        print("SUMMARY METRICHE:")
+        print("="*60)
+        print(f"Accuracy:              {accuracy:.3f}")
+        if weighted_avg:
+            print(f"Weighted Precision:    {weighted_avg.get('precision', 0):.3f}")
+            print(f"Weighted Recall:       {weighted_avg.get('recall', 0):.3f}")
+            print(f"Weighted F1-Score:     {weighted_avg.get('f1-score', 0):.3f}")
+        if macro_avg:
+            print(f"Macro F1-Score:        {macro_avg.get('f1-score', 0):.3f}")
+        
+        if plot:
+            # Crea figura con subplots
+            fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+            
+            # 1. Confusion Matrix
+            cm = confusion_matrix(y_va, y_pred, labels=all_classes)
+            sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=axes[0],
+                    xticklabels=all_classes, yticklabels=all_classes)
+            axes[0].set_title('Confusion Matrix - Ensemble')
+            axes[0].set_xlabel('Predicted')
+            axes[0].set_ylabel('True')
+            
+            # Evidenzia classi anomale
+            if novel_predicted:
+                for cls in novel_predicted:
+                    if cls in all_classes:
+                        idx = all_classes.index(cls)
+                        axes[0].axvline(x=idx+0.5, color='red', linestyle='--', alpha=0.5)
+                        axes[0].text(idx+0.5, -0.5, 'NEW', ha='center', color='red', fontweight='bold')
+            
+            # 2. Bar plot delle metriche per classe
+            precisions = []
+            recalls = []
+            f1_scores = []
+            bar_labels = []
+            bar_colors = []
+            
+            for c in all_classes:
+                class_key = str(c)
+                if class_key in report and isinstance(report[class_key], dict):
+                    precisions.append(report[class_key].get('precision', 0))
+                    recalls.append(report[class_key].get('recall', 0))
+                    f1_scores.append(report[class_key].get('f1-score', 0))
+                    
+                    # Colora diversamente le classi speciali
+                    if c in novel_predicted:
+                        bar_colors.append('red')
+                        bar_labels.append(f'{c}*')
+                    elif c in missed_classes:
+                        bar_colors.append('orange')
+                        bar_labels.append(f'{c}!')
+                    else:
+                        bar_colors.append('blue')
+                        bar_labels.append(str(c))
+                else:
+                    # Classe non nel report (probabilmente novel)
+                    precisions.append(0)
+                    recalls.append(0)
+                    f1_scores.append(0)
+                    bar_colors.append('gray')
+                    bar_labels.append(f'{c}?')
+            
+            x = np.arange(len(all_classes))
+            width = 0.25
+            
+            bars1 = axes[1].bar(x - width, precisions, width, label='Precision', alpha=0.8)
+            bars2 = axes[1].bar(x, recalls, width, label='Recall', alpha=0.8)
+            bars3 = axes[1].bar(x + width, f1_scores, width, label='F1-Score', alpha=0.8)
+            
+            axes[1].set_xlabel('Classes')
+            axes[1].set_ylabel('Score')
+            axes[1].set_title('Metriche per Classe')
+            axes[1].set_xticks(x)
+            axes[1].set_xticklabels(bar_labels)
+            axes[1].legend()
+            axes[1].grid(axis='y', alpha=0.3)
+            axes[1].set_ylim([0, 1.1])
+            
+            # 3. Distribuzione delle predizioni
+            pred_counts = pd.Series(y_pred).value_counts().sort_index()
+            true_counts = pd.Series(y_va).value_counts().sort_index()
+            
+            # Assicurati che tutte le classi siano rappresentate
+            for c in all_classes:
+                if c not in pred_counts.index:
+                    pred_counts[c] = 0
+                if c not in true_counts.index:
+                    true_counts[c] = 0
+            
+            pred_counts = pred_counts.sort_index()
+            true_counts = true_counts.sort_index()
+            
+            x_dist = np.arange(len(all_classes))
+            width_dist = 0.35
+            
+            axes[2].bar(x_dist - width_dist/2, true_counts.values, width_dist, 
+                    label='True Distribution', alpha=0.7, color='green')
+            axes[2].bar(x_dist + width_dist/2, pred_counts.values, width_dist, 
+                    label='Predicted Distribution', alpha=0.7, color='orange')
+            
+            axes[2].set_xlabel('Classes')
+            axes[2].set_ylabel('Count')
+            axes[2].set_title('Distribuzione Classi: True vs Predicted')
+            axes[2].set_xticks(x_dist)
+            axes[2].set_xticklabels(all_classes)
+            axes[2].legend()
+            axes[2].grid(axis='y', alpha=0.3)
+            
+            # Aggiungi annotazioni per classi anomale
+            for i, c in enumerate(all_classes):
+                if c in novel_predicted:
+                    axes[2].text(i, pred_counts.iloc[i] + 1, 'NEW', 
+                            ha='center', color='red', fontweight='bold', fontsize=8)
+            
+            plt.tight_layout()
+            plt.show()
+        
+        return report
 
-    
+
