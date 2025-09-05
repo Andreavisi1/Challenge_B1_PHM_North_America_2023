@@ -1,75 +1,72 @@
 from __future__ import annotations
 
+from typing import Any, Dict, Sequence, Tuple
+
 import numpy as np
 import pandas as pd
-from typing import Any, Dict, Tuple, Sequence
+from numpy.typing import NDArray
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
-from numpy.typing import NDArray
 
 
 class SubmissionGenerator:
-    """Generatore di submission semplificato per competizioni ML."""
-    
+    """
+    Generatore di submission semplificato per competizioni ML.
+
+    - Espansione delle probabilità alle 11 classi (0..10).
+    - Trasferimenti di probabilità per classi 4/6/8 tramite detector (IsolationForest).
+    - Confidence SEMPLICE: 1 se max(prob) >= conf_thresh, altrimenti 0.
+    """
+
     def __init__(self, rng_seed: int = 42):
         self.rng_seed = rng_seed
-        self.detectors = {}
-        self.missing_map = {4: 5, 6: 7, 8: (9, 10)}
-        
+        self.detectors: Dict[int, IsolationForest] = {}
+        self.missing_map: Dict[int, int | Tuple[int, int]] = {4: 5, 6: 7, 8: (9, 10)}
+        self.scaler: StandardScaler | None = None
+
+    # --------------------------
+    # Utility per il modello
+    # --------------------------
     @staticmethod
     def get_model_classes(model: Any) -> NDArray[np.int_]:
-        """Estrae model.classes_ in modo robusto."""
+        """Estrae model.classes_ in modo robusto (anche da pipeline)."""
         if hasattr(model, "classes_"):
             return np.asarray(model.classes_)
         if hasattr(model, "named_steps"):
+            # tenta 'model', altrimenti l'ultimo step
             step = model.named_steps.get("model", list(model.named_steps.values())[-1])
             return np.asarray(step.classes_)
         if hasattr(model, "steps"):
             return np.asarray(model.steps[-1][1].classes_)
-        raise AttributeError("Impossibile recuperare classes_")
-    
-    def expand_to_0_10(self, proba_seen: NDArray, col_labels: NDArray) -> NDArray:
-        """Espande probabilità a 11 classi (0-10)."""
-        out = np.zeros((proba_seen.shape[0], 11))
-        out[:, col_labels.astype(int)] = proba_seen
-        return out
-    
-    def confidence_score(self, probs: NDArray, w=(0.6, 0.4)) -> NDArray:
-        """
-        Confidence basata SOLO su:
-        (1) entropia normalizzata (alto = più confident)
-        (2) varianza ordinale (alto = più confident)
-        L'anomalia NON viene più usata.
-        """
-        eps = 1e-12
-        # (1) entropia normalizzata
-        H = -(probs * np.log(probs + eps)).sum(1)
-        H /= np.log(probs.shape[1])
-        H = 1 - H  # high=confident
-        # (2) varianza ordinale
-        ord_conf = self.ordinal_confidence(probs)
-        # combinazione
-        s = w[0] * H + w[1] * ord_conf
-        return s
+        raise AttributeError("Impossibile recuperare classes_ dal modello o dalla pipeline.")
 
     @staticmethod
-    def ordinal_confidence(probs: NDArray) -> NDArray:
-        """Confidence basata su varianza ordinale."""
-        class_values = np.arange(probs.shape[1])
-        expected = (probs * class_values).sum(axis=1)
-        variance = (probs * (class_values - expected[:, None])**2).sum(axis=1)
-        max_var = ((class_values - class_values.mean())**2).mean()
-        return 1 - np.sqrt(np.clip(variance / max(max_var, 1e-12), 0, 1))
-    
+    def expand_to_0_10(proba_seen: NDArray, col_labels: NDArray) -> NDArray:
+        """
+        Espande una matrice di probabilità (n_samples x n_classi_viste) a 11 classi (0..10),
+        collocando ogni colonna nella posizione coerente con la sua etichetta reale.
+        """
+        out = np.zeros((proba_seen.shape[0], 11), dtype=float)
+        out[:, col_labels.astype(int)] = proba_seen
+        # normalizzazione difensiva (eventuali piccoli drift numerici)
+        out_sum = out.sum(axis=1, keepdims=True)
+        out /= np.maximum(out_sum, 1e-12)
+        return out
+
     def needs_model_scaling(self, model: Any) -> bool:
-        """Verifica se il modello richiede scaling."""
-        scaling_models = ["LogisticRegression", "RidgeClassifier", "SVC"]
-        
-        # Controlla se è una pipeline
+        """
+        Verifica se il modello (o l'ultimo step della pipeline) è tipicamente sensibile allo scaling.
+        Se nella pipeline è già presente uno scaler, restituisce False.
+        """
+        scaling_models = ("LogisticRegression", "RidgeClassifier", "SVC")
+
         if hasattr(model, "named_steps"):
-            has_scaler = "scaler" in model.named_steps or any("scaler" in name.lower() for name in model.named_steps.keys())
+            # se c'è già uno scaler in pipeline, non serve scalare
+            has_scaler = "scaler" in model.named_steps or any(
+                "scaler" in name.lower() for name in model.named_steps.keys()
+            )
             if has_scaler:
-                return False  # Ha già scaler
+                return False
             model_step = model.named_steps.get("model", list(model.named_steps.values())[-1])
             model_name = model_step.__class__.__name__
         elif hasattr(model, "steps"):
@@ -79,85 +76,99 @@ class SubmissionGenerator:
             model_name = model.steps[-1][1].__class__.__name__
         else:
             model_name = model.__class__.__name__
-        
+
         return any(req in model_name for req in scaling_models)
-    
-    def build_anomaly_detectors(self, X_tr: NDArray, y_tr: NDArray, contamination: float = 0.05) -> None:
-        """Costruisce detector per classi 4, 6, 8."""
+
+    # --------------------------
+    # Anomaly detectors & transfers
+    # --------------------------
+    def build_anomaly_detectors(
+        self,
+        X_tr: NDArray,
+        y_tr: NDArray,
+        contamination: float = 0.05,
+    ) -> None:
+        """
+        Costruisce IsolationForest per le classi 4, 6, 8 (se presenti e con campioni sufficienti).
+        """
         scaler = StandardScaler().fit(X_tr)
         X_scaled = scaler.transform(X_tr)
         self.scaler = scaler
-        
-        for cls in [4, 6, 8]:
+
+        self.detectors.clear()
+        for cls in (4, 6, 8):
             mask = (y_tr == cls)
             if not np.any(mask):
                 continue
-                
             X_cls = X_scaled[mask]
-            if len(X_cls) < 10:  # troppo pochi campioni
+            if len(X_cls) < 10:  # troppo pochi campioni per un detector affidabile
                 continue
-                
-            detector = IsolationForest(
+            det = IsolationForest(
                 contamination=contamination,
                 random_state=self.rng_seed,
-                n_jobs=-1
+                n_jobs=-1,
             ).fit(X_cls)
-            
-            self.detectors[cls] = detector
-    
-    def apply_transfers(self, probs: NDArray, X_test: NDArray, alpha: float = 0.3, return_anomaly: bool = False):
-        """
-        Applica i trasferimenti di probabilità basati sui detector.
-        Se return_anomaly=False (default), NON calcola l'anomalia (evita costi inutili).
-        """
-        if not hasattr(self, 'scaler') or not self.detectors:
-            return ({}, np.zeros(len(X_test))) if return_anomaly else {}
-        Xs = self.scaler.transform(X_test)
-        transfers = {}
+            self.detectors[cls] = det
 
-        # Calcolo anomalia solo se richiesto
-        if return_anomaly:
-            probs_snapshot = probs.copy()
-            anom_num = np.zeros(len(X_test))
-            anom_den = np.zeros(len(X_test))
+    def apply_transfers(
+        self,
+        probs: NDArray,
+        X_test: NDArray,
+        alpha: float = 0.3,
+    ) -> Dict[str, int] | Tuple[Dict[str, int], NDArray]:
+        """
+        Applica trasferimenti di probabilità basati sui detector.
+        - Classi 4 e 6: trasferisce una quota verso 5 e 7 rispettivamente.
+        - Classe 8: trasferisce verso 9 e 10 con split DINAMICO basato sull'anomalia:
+            a in [0,1] (alto = più anomalo) -> quota_9 = (1 - a), quota_10 = a.
+        """
+        if (not hasattr(self, "scaler")) or (not self.detectors):
+            return {}
+
+        Xs = self.scaler.transform(X_test)
+        transfers: Dict[str, int] = {}
 
         for cls, det in self.detectors.items():
-            # score di anomalia per TUTTI i campioni (in [0,1], alto = più anomalo)
+            # decision_function: più alto = più "normale" -> mappiamo a [0,1] con sigmoide invertita
             s = det.decision_function(Xs)
-            a = 1 / (1 + np.exp((s - np.median(s)) / (np.std(s) + 1e-6)))
+            a = 1.0 / (1.0 + np.exp((s - np.median(s)) / (np.std(s) + 1e-6)))  # alto = più anomalo
 
-            # accumulo solo se serve restituire l'anomalia
-            if return_anomaly:
-                w = probs_snapshot[:, cls]
-                anom_num += a * w
-                anom_den += w
-
-            # trasferimenti come prima
             if cls in (4, 6):
-                dst = self.missing_map[cls]
+                dst = int(self.missing_map[cls])  # 4->5, 6->7
                 moved = alpha * a * probs[:, cls]
                 probs[:, cls] -= moved
                 probs[:, dst] += moved
                 transfers[f"{cls}_to_{dst}"] = int((moved > 0).sum())
+
             elif cls == 8:
+                dst9, dst10 = self.missing_map[8]
+                # aumento leggero di alpha come prima (facoltativo)
                 alpha_eff = (alpha + 0.1) if alpha < 0.9 else alpha
                 moved = alpha_eff * a * probs[:, 8]
                 probs[:, 8] -= moved
-                probs[:, 9] += 0.7 * moved
-                probs[:, 10] += 0.3 * moved
+
+                # --- SPLIT DINAMICO:
+                b = 0.9
+                k = 6.0  # pendenza
+                a_tilt = 1/(1 + np.exp(-k*(a - b)))      # sigmoid(a - b)
+                p9 = 1 - a_tilt
+                p10 = a_tilt
+                     # complementare
+
+                probs[:, dst9] += p9 * moved
+                probs[:, dst10] += p10 * moved
                 transfers["8_to_9_10"] = int((moved > 0).sum())
 
-        # clamp & renorm di sicurezza
-        probs[:] = np.maximum(probs, 0)
-        probs[:] = probs / np.maximum(probs.sum(axis=1, keepdims=True), 1e-12)
+        # clamp & renorm
+        np.maximum(probs, 0.0, out=probs)
+        probs_sum = probs.sum(axis=1, keepdims=True)
+        probs /= np.maximum(probs_sum, 1e-12)
 
-        if return_anomaly:
-            anom = np.divide(anom_num, np.maximum(anom_den, 1e-9))  # media pesata
-            anom = np.nan_to_num(anom, nan=0)
-            return transfers, anom
         return transfers
 
-    
+    # --------------------------
+    # Pipeline principale
+    # --------------------------
     def generate_submission(
         self,
         X_tr: NDArray,
@@ -165,76 +176,94 @@ class SubmissionGenerator:
         X_test: NDArray,
         test_ids: Sequence,
         model: Any,
-        conf_thresh: float = 0.7,
+        conf_thresh: float = 0.6,
         contamination: float = 0.05,
-        alpha: float = 0.3
+        alpha: float = 0.3,
     ) -> Tuple[pd.DataFrame, Dict]:
-        """Genera submission con gestione anomalie."""
-        
-        # 1. Prepara dati per il modello
+        """
+        Genera il DataFrame di submission e le diagnostics.
+
+        Steps:
+          1) (eventuale) scaling per il modello
+          2) predict_proba
+          3) mapping classi modello -> classi reali
+          4) espansione a 11 classi (0..10)
+          5) anomaly detectors + transfers
+          6) confidence semplice: 1 se max(prob) >= conf_thresh, altrimenti 0
+        """
+        # 1) Prepara input per il modello
         if self.needs_model_scaling(model):
             model_scaler = StandardScaler().fit(X_tr)
             X_model_input = model_scaler.transform(X_test)
         else:
             X_model_input = X_test
-        
-        # 2. Predizioni base
+
+        # 2) Predizioni base
         proba_seen = model.predict_proba(X_model_input)
-        y_pred = model.predict(X_model_input)
-        
-        # 3. Mapping a classi reali
+
+        # 3) Mapping classi
         enc_classes = self.get_model_classes(model)
         real_classes = np.sort(np.unique(y_tr))
-        
+
         if set(enc_classes) == set(real_classes):
             col_labels = enc_classes
-            y_pred_real = y_pred
         else:
+            # Caso in cui enc_classes siano indici di real_classes
             col_labels = real_classes[enc_classes]
-            y_pred_real = real_classes[y_pred]
-        
-        # 4. Espandi a 11 classi
+
+        # 4) Espansione a 11 classi
         probs_11 = self.expand_to_0_10(proba_seen, col_labels)
-        
-        # 5. Costruisci detector e applica trasferimenti
+
+        # 5) Detector & transfers
         self.build_anomaly_detectors(X_tr, y_tr, contamination)
-        transfers = self.apply_transfers(probs_11, X_test, alpha, return_anomaly=False)
+        transfers = self.apply_transfers(probs_11, X_test, alpha)
 
         probs_final = probs_11
 
-        # 7. Confidence finale (NON usa l’anomalia)
-        confidence = self.confidence_score(probs_final)
+        # 6) Confidence semplice
+        max_proba = probs_final.max(axis=1)
+        confidence_bin = (max_proba >= conf_thresh).astype(int)
 
-        # 8. Crea DataFrame
+        # 7) Costruzione DataFrame
         cols = [f"prob_{i}" for i in range(11)]
         df = pd.DataFrame(probs_final, columns=cols)
         df.insert(0, "id", test_ids)
-        df["confidence"] = (confidence > conf_thresh).astype(int)
-        
-        # 9. Diagnostics
+        df["confidence"] = confidence_bin
+
+        # 8) Diagnostics
         diagnostics = {
             "detectors_built": list(self.detectors.keys()),
             "transfers": transfers,
             "confidence_stats": {
-                "mean": float(confidence.mean()),
-                "high_conf_pct": float((confidence > conf_thresh).mean())
-            }
+                "threshold": float(conf_thresh),
+                "mean_of_max_proba": float(max_proba.mean()),
+                "high_conf_pct": float(confidence_bin.mean()),
+            },
         }
-        
+
         return df, diagnostics
-    
+
     def create_submission_simple(
         self,
         X_tr: NDArray,
-        y_tr: NDArray, 
+        y_tr: NDArray,
         X_test: NDArray,
         test_df: pd.DataFrame,
         model: Any,
-        conf_thresh: float = 0.7,
+        conf_thresh: float = 0.6,
         contamination: float = 0.05,
-        alpha: float = 0.3
+        alpha: float = 0.3,
     ) -> Tuple[pd.DataFrame, Dict]:
-        """Wrapper semplificato."""
+        """
+        Wrapper pratico che prende direttamente test_df con colonna 'id'.
+        """
         return self.generate_submission(
-            X_tr, y_tr, X_test, test_df["id"].values, model, conf_thresh, contamination, alpha
+            X_tr=X_tr,
+            y_tr=y_tr,
+            X_test=X_test,
+            test_ids=test_df["id"].values,
+            model=model,
+            conf_thresh=conf_thresh,
+            contamination=contamination,
+            alpha=alpha,
         )
