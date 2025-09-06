@@ -121,49 +121,62 @@ class SubmissionGenerator:
         - Classi 4 e 6: trasferisce una quota verso 5 e 7 rispettivamente.
         - Classe 8: trasferisce verso 9 e 10 con split DINAMICO basato sull'anomalia:
             a in [0,1] (alto = più anomalo) -> quota_9 = (1 - a), quota_10 = a.
+        
+        CONDIZIONE: Il trasferimento avviene SOLO se la classe di origine (4, 6, o 8) 
+        ha la probabilità più alta per quel campione specifico.
         """
         if (not hasattr(self, "scaler")) or (not self.detectors):
             return {}
-
+        
         Xs = self.scaler.transform(X_test)
         transfers: Dict[str, int] = {}
-
+        
         for cls, det in self.detectors.items():
             # decision_function: più alto = più "normale" -> mappiamo a [0,1] con sigmoide invertita
             s = det.decision_function(Xs)
             a = 1.0 / (1.0 + np.exp((s - np.median(s)) / (np.std(s) + 1e-6)))  # alto = più anomalo
-
+            
+            # CONDIZIONE: trasferimento solo se cls è la classe con probabilità massima
+            dominant_mask = probs.argmax(axis=1) == cls
+            
             if cls in (4, 6):
                 dst = int(self.missing_map[cls])  # 4->5, 6->7
                 moved = alpha * a * probs[:, cls]
+                
+                # Applica trasferimento SOLO ai campioni dove cls è dominante
+                moved = np.where(dominant_mask, moved, 0.0)
+                
                 probs[:, cls] -= moved
                 probs[:, dst] += moved
                 transfers[f"{cls}_to_{dst}"] = int((moved > 0).sum())
-
+                
             elif cls == 8:
                 dst9, dst10 = self.missing_map[8]
                 # aumento leggero di alpha come prima (facoltativo)
                 alpha_eff = (alpha + 0.1) if alpha < 0.9 else alpha
                 moved = alpha_eff * a * probs[:, 8]
+                
+                # Applica trasferimento SOLO ai campioni dove classe 8 è dominante
+                moved = np.where(dominant_mask, moved, 0.0)
+                
                 probs[:, 8] -= moved
-
+                
                 # --- SPLIT DINAMICO:
                 b = 0.9
                 k = 6.0  # pendenza
                 a_tilt = 1/(1 + np.exp(-k*(a - b)))      # sigmoid(a - b)
                 p9 = 1 - a_tilt
                 p10 = a_tilt
-                     # complementare
-
+                
                 probs[:, dst9] += p9 * moved
                 probs[:, dst10] += p10 * moved
                 transfers["8_to_9_10"] = int((moved > 0).sum())
-
+        
         # clamp & renorm
         np.maximum(probs, 0.0, out=probs)
         probs_sum = probs.sum(axis=1, keepdims=True)
         probs /= np.maximum(probs_sum, 1e-12)
-
+        
         return transfers
 
     # --------------------------

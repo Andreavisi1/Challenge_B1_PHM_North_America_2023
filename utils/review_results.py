@@ -138,41 +138,21 @@ def plot_submission(df: pd.DataFrame,
     # 3) (opzionale) Distribuzione confidence
     if has_conf:
         conf_counts = df[conf_col].value_counts().sort_index()
-        x = [0, 1]
-        y = [int(conf_counts.get(0, 0)), int(conf_counts.get(1, 0))]
+        labels = ['Low', 'High']
+        sizes = [int(conf_counts.get(0, 0)), int(conf_counts.get(1, 0))]
+
         ax = axes[plot_idx]; plot_idx += 1
-        ax.bar(x, y)
+        wedges, texts, autotexts = ax.pie(
+            sizes,
+            labels=labels,
+            autopct=lambda p: f"{p:.1f}%\n({int(p*sum(sizes)/100)})",
+            startangle=90,
+            textprops={'color': "black"}
+        )
         ax.set_title('Distribuzione Confidence')
-        ax.set_xlabel('Confidence (0=Low, 1=High)')
-        ax.set_ylabel('Conteggi')
-        ax.set_xticks([0, 1])
-        ax.set_xticklabels(['Low', 'High'])
-        ax.grid(True, alpha=0.3)
 
-    # 4) Distribuzione Max Probability
-    ax = axes[plot_idx]; plot_idx += 1
-    ax.hist(max_probs, bins=30)
-    ax.set_title('Distribuzione Max Probabilità')
-    ax.set_xlabel('Max Probability')
-    ax.set_ylabel('Frequenza')
-    ax.axvline(max_probs.mean(), linestyle='--', linewidth=2, label=f"Media: {max_probs.mean():.3f}")
-    ax.legend()
-    ax.grid(True, alpha=0.3)
 
-    # 5) Somma Probabilità di classi "critiche" (personalizza qui)
-    critical_classes = [5, 7, 9]  # modifica liberamente in base al tuo caso
-    critical_classes = [c for c in critical_classes if 0 <= c < len(prob_cols)]
-    if critical_classes:
-        sums = [df[f"prob_{c}"].sum() for c in critical_classes]
-        ax = axes[plot_idx]; plot_idx += 1
-        ax.bar(critical_classes, sums)
-        ax.set_title('Somma Prob. Classi Critiche')
-        ax.set_xlabel('Classe')
-        ax.set_ylabel('Somma Probabilità')
-        ax.set_xticks(critical_classes)
-        ax.grid(True, alpha=0.3)
-
-    # 6) (opzionale) Max prob per confidence
+    # 4)Max prob per confidence
     if has_conf:
         hi = df[df[conf_col] == 1][prob_cols].max(axis=1)
         lo = df[df[conf_col] == 0][prob_cols].max(axis=1)
@@ -181,6 +161,7 @@ def plot_submission(df: pd.DataFrame,
             ax.hist(hi, bins=20, alpha=0.6, label=f'High Conf ({len(hi)})')
         if len(lo) > 0:
             ax.hist(lo, bins=20, alpha=0.6, label=f'Low Conf ({len(lo)})')
+        ax.axvline(max_probs.mean(), linestyle='--', linewidth=2, label=f"Media: {max_probs.mean():.3f}")
         ax.set_title('Max Prob per Confidence')
         ax.set_xlabel('Max Probability')
         ax.set_ylabel('Frequenza')
