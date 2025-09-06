@@ -381,79 +381,206 @@ class ModelSelectorClassification:
         }
     
     def evaluate_all(self, X_val, y_val):
-        """Valuta tutti i modelli su validation set e mostra le confusion matrix."""
+        """
+        Valuta tutti i modelli su validation set e mostra le confusion matrix.
+        """
         self._last_X_val = X_val
         self._last_y_val = y_val
 
-        print("\n" + "=" * 60)
+        print("\n" + "="*60)
         print("VALUTAZIONE SU VALIDATION - TUTTI I MODELLI")
-        print("=" * 60)
+        print("="*60)
 
         self.val_results = []
-        self.conf_matrices = {}  
-
-        # Ordine/etichette di classe coerenti
-        if hasattr(self, "classes_") and self.classes_ is not None:
-            classes = list(self.classes_)
-        else:
-            # Se non definito altrove, inferisco dalle y di validation
-            classes = list(np.unique(y_val))
-
+        self.conf_matrices = {}
+        
+        # Prima di tutto, capiamo quali classi ci sono
+        val_classes = sorted(np.unique(y_val))
+        print(f"\n📊 Classi nel validation set: {val_classes}")
+        print(f"   Numero totale campioni: {len(y_val)}")
+        
+        # Per ogni modello
         for name, search in self.searches.items():
-            est = search.best_estimator_
-
+            print(f"\n{'='*40}")
+            print(f"🔍 {name}")
+            print(f"{'='*40}")
             
+            est = search.best_estimator_
+            
+            # Valutazione metriche standard
             res = self.evaluate(est, X_val, y_val, name, print_cm=False, print_report=False)
             self.val_results.append(res)
-
+            
             try:
                 y_pred = est.predict(X_val)
             except Exception as e:
-                print(f"[{name}] Impossibile calcolare predizioni per CM: {e}")
+                print(f"❌ Errore nelle predizioni: {e}")
                 continue
-
-            cm_raw = confusion_matrix(y_val, y_pred, labels=classes)
-            # Normalizzazione 'true': per riga (somma riga = 1); gestisco righe nulle
-            with np.errstate(invalid='ignore'):
-                cm_norm = cm_raw.astype(float)
+            
+            # GESTIONE INTELLIGENTE DELLE CLASSI
+            pred_classes = sorted(np.unique(y_pred))
+            
+            # Verifica quali classi il modello conosce
+            if hasattr(est, 'classes_'):
+                model_classes = list(est.classes_)
+                print(f"   Classi che il modello conosce: {model_classes}")
+            else:
+                model_classes = pred_classes
+                
+            print(f"   Classi effettivamente predette: {pred_classes}")
+            
+            # Identifica problemi
+            missing_in_pred = set(val_classes) - set(pred_classes)
+            if missing_in_pred:
+                print(f"   ⚠️  Classi MAI predette: {sorted(missing_in_pred)}")
+                
+            # USA TUTTE LE CLASSI PRESENTI (unione di val e pred)
+            all_classes = sorted(set(val_classes) | set(pred_classes))
+            
+            # Calcola confusion matrix con TUTTE le classi
+            from sklearn.metrics import confusion_matrix
+            cm_raw = confusion_matrix(y_val, y_pred, labels=all_classes)
+            
+            # Normalizzazione per riga (percentuali per classe vera)
+            with np.errstate(invalid='ignore', divide='ignore'):
+                cm_norm = cm_raw.astype(float).copy()
                 row_sums = cm_norm.sum(axis=1, keepdims=True)
-                cm_norm = np.divide(cm_norm, row_sums, out=np.zeros_like(cm_norm, dtype=float), where=row_sums!=0)
-
+                # Evita divisione per zero
+                row_sums[row_sums == 0] = 1
+                cm_norm = cm_norm / row_sums
+            
+            # Salva per uso futuro
             self.conf_matrices[name] = {
-                "labels": classes,
+                "labels": all_classes,
                 "raw": cm_raw,
                 "normalized": cm_norm
             }
-
-            # Stampa tabellare compatta
-            print(f"\n— Matrice di confusione (raw) – {name}")
-            df_raw = pd.DataFrame(cm_raw, index=[f"true_{c}" for c in classes], columns=[f"pred_{c}" for c in classes])
-            print(df_raw)
-
-            print(f"\n— Matrice di confusione (normalizzata per riga) – {name}")
-            df_norm = pd.DataFrame(cm_norm, index=[f"true_{c}" for c in classes], columns=[f"pred_{c}" for c in classes])
-            # 3 decimali per leggibilità
-            print(df_norm.round(3))
-
-            '''try:
-                import matplotlib.pyplot as plt
-                fig1 = ConfusionMatrixDisplay(cm_raw, display_labels=classes)
-                fig1.plot(values_format=".0f", xticks_rotation=45, colorbar=False)
-                plt.title(f"Confusion Matrix (raw) – {name}")
-                plt.tight_layout()
-                plt.show()
-
-                fig2 = ConfusionMatrixDisplay(cm_norm, display_labels=classes)
-                fig2.plot(values_format=".2f", xticks_rotation=45, colorbar=False)
-                plt.title(f"Confusion Matrix (norm) – {name}")
-                plt.tight_layout()
-                plt.show()
-            except Exception as _:
-                pass'''
-
+            
+            # ===== STAMPA BELLA CONFUSION MATRIX =====
+            
+            # 1. Matrice RAW (conteggi)
+            print(f"\n   📋 Confusion Matrix (conteggi)")
+            print(f"   " + "-"*35)
+            
+            # Header
+            header = "TRUE\\PRED"
+            for cls in all_classes:
+                header += f"{cls:>6}"
+            print(f"   {header}")
+            print(f"   " + "-"*35)
+            
+            # Righe
+            for i, true_cls in enumerate(all_classes):
+                row = f"   {true_cls:>9}"
+                for j, pred_cls in enumerate(all_classes):
+                    count = cm_raw[i, j]
+                    if count == 0:
+                        row += f"{'·':>6}"  # Punto per gli zeri (più pulito)
+                    elif i == j:  # Diagonale (corretti)
+                        row += f"\033[92m{count:>6}\033[0m"  # Verde per i corretti
+                    else:
+                        row += f"\033[91m{count:>6}\033[0m"  # Rosso per gli errori
+                print(row)
+            
+            # 2. Matrice NORMALIZZATA (percentuali)
+            print(f"\n   📊 Confusion Matrix (percentuali per riga)")
+            print(f"   " + "-"*35)
+            
+            # Header
+            header = "TRUE\\PRED"
+            for cls in all_classes:
+                header += f"{cls:>7}"
+            print(f"   {header}")
+            print(f"   " + "-"*35)
+            
+            # Righe
+            for i, true_cls in enumerate(all_classes):
+                row = f"   {true_cls:>9}"
+                for j, pred_cls in enumerate(all_classes):
+                    val = cm_norm[i, j]
+                    if val == 0:
+                        row += f"{'·':>7}"
+                    elif i == j:  # Diagonale
+                        if val >= 0.9:
+                            row += f"\033[92m{val:>6.1%}\033[0m "  # Verde brillante se >= 90%
+                        else:
+                            row += f"\033[93m{val:>6.1%}\033[0m "  # Giallo se < 90%
+                    else:
+                        if val >= 0.1:
+                            row += f"\033[91m{val:>6.1%}\033[0m "  # Rosso se errore significativo
+                        else:
+                            row += f"{val:>6.1%} "  # Normale se errore piccolo
+                print(row)
+            
+            # 3. Analisi degli errori principali
+            print(f"\n   🎯 Analisi errori principali:")
+            errors = []
+            for i, true_cls in enumerate(all_classes):
+                for j, pred_cls in enumerate(all_classes):
+                    if i != j and cm_raw[i, j] > 0:
+                        errors.append((true_cls, pred_cls, cm_raw[i, j], cm_norm[i, j]))
+            
+            # Ordina per numero di errori
+            errors.sort(key=lambda x: x[2], reverse=True)
+            
+            # Mostra top 5 errori
+            for k, (true_cls, pred_cls, count, perc) in enumerate(errors[:5]):
+                print(f"      {k+1}. Classe {true_cls} → {pred_cls}: {count} errori ({perc:.1%})")
+            
+            # 4. Performance per classe
+            print(f"\n   📈 Performance per classe:")
+            for i, cls in enumerate(all_classes):
+                total = cm_raw[i].sum()
+                if total > 0:
+                    correct = cm_raw[i, i]
+                    accuracy = correct / total
+                    
+                    # Calcola quanti sono stati predetti come questa classe
+                    predicted_as_this = cm_raw[:, i].sum()
+                    
+                    # Emoji in base alla performance
+                    if accuracy >= 0.95:
+                        emoji = "✅"
+                    elif accuracy >= 0.8:
+                        emoji = "🟡"
+                    else:
+                        emoji = "❌"
+                        
+                    print(f"      {emoji} Classe {cls}: {correct}/{total} corretti ({accuracy:.1%}) - {predicted_as_this} predetti come {cls}")
+                else:
+                    print(f"      ⚪ Classe {cls}: nessun campione nel validation")
+        
+        # ===== ANALISI COMPARATIVA FINALE =====
+        print(f"\n{'='*60}")
+        print("📊 ANALISI COMPARATIVA")
+        print(f"{'='*60}")
+        
         self._analyze_results()
+        
+        # Trova il miglior modello
+        best_idx = np.argmax([r['accuracy'] for r in self.val_results])
+        best_model = self.val_results[best_idx]['model']
+        best_acc = self.val_results[best_idx]['accuracy']
+        
+        print(f"\n🏆 MIGLIOR MODELLO: {best_model}")
+        print(f"   Accuracy: {best_acc:.4f}")
+        
+        # Mostra ranking
+        print(f"\n📊 RANKING MODELLI:")
+        sorted_results = sorted(self.val_results, key=lambda x: x['accuracy'], reverse=True)
+        for i, res in enumerate(sorted_results, 1):
+            if i == 1:
+                medal = "🥇"
+            elif i == 2:
+                medal = "🥈"
+            elif i == 3:
+                medal = "🥉"
+            else:
+                medal = f"{i}."
+                
+            print(f"   {medal} {res['model']:<25} Acc: {res['accuracy']:.4f}  F1: {res['f1_macro']:.4f}")
+        
         return self.val_results
-
     
     def _analyze_results(self):
         """Analizza e confronta i risultati di CV e validation."""
