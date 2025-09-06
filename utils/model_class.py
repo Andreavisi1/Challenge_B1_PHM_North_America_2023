@@ -572,34 +572,26 @@ class ModelSelectorClassification:
             return ensemble
         else:
             raise ValueError("Esegui prima evaluate_all()")
-    
+
     def save_model(self, model=None, model_name=None):
-        """Salva il modello (anche ensemble) con metadati robusti."""
+        """Salva solo il modello con joblib."""
         # 1) Sorgente del modello e del nome
         if model is None:
-            model = self.best_model
-            model_name = self.best_model_name
+            model = getattr(self, "best_model", None)
+            model_name = getattr(self, "best_model_name", None)
 
         if model is None:
             raise ValueError("Nessun modello da salvare. Esegui prima fit()")
 
-        # Se non è stato passato model_name, prova a costruirlo
         if model_name is None:
-            try:
-                # es. Pipeline(...) o VotingClassifier(...)
-                model_name = type(model).__name__
-            except Exception:
-                model_name = "UnknownModel"
-
-        # Riconosco se è un ensemble (VotingClassifier)
-        is_ensemble = isinstance(model, VotingClassifier)
+            model_name = type(model).__name__
 
         # 2) Cartella e timestamp
-        os.makedirs('models', exist_ok=True)
+        os.makedirs("models", exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-        # 3) Salvataggio del modello (joblib gestisce anche VotingClassifier)
-        model_filename = f'models/best_model_classification_{model_name}_{timestamp}.joblib'
+        # 3) Salvataggio modello
+        model_filename = f"models/best_model_classification_{model_name}_{timestamp}.joblib"
         joblib.dump(model, model_filename)
         print(f"Modello salvato con joblib in: {model_filename}")
 
