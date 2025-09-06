@@ -349,6 +349,10 @@ class ModelSelectorClassification:
                 auc = None
 
         # Confusion matrix
+        print(np.unique(y_val, return_counts=True))
+        print(np.unique(y_pred, return_counts=True))
+        print(np.unique(labels_val, return_counts=True))
+        
         cm = confusion_matrix(y_val, y_pred, labels=labels_val)
         cm_df = pd.DataFrame(cm, index=[f"true_{l}" for l in labels_val],
                            columns=[f"pred_{l}" for l in labels_val])
