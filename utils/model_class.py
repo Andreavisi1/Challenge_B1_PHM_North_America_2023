@@ -246,33 +246,73 @@ class ModelSelectorClassification:
         idx = [np.where(self.le.classes_ == c)[0][0] for c in target_labels]
         return y_proba_enc[:, idx]
     
-    def fit(self, X_train, y_train, feature_names=None):
+    def fit(self, X_train, y_train, feature_names=None, all_classes=None):
         """
         Esegue il training e tuning di tutti i modelli.
         
         Args:
             X_train: Feature di training
             y_train: Target di training
-            feature_names: Nomi delle feature (per importance)
+            feature_names: Nomi delle feature (opzionale, per importance)
+            all_classes: Array di TUTTE le classi possibili del problema
+                        Es. per PHM: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+                        IMPORTANTE: deve includere anche classi non presenti nel training
         """
         print("=" * 60)
         print("TRAINING MODELLI (Classificazione)")
         print("=" * 60)
         
-        # Encoding delle etichette
-        y_tr_enc = self.le.fit_transform(y_train)
-        n_classes = len(self.le.classes_)
+        # CONFIGURAZIONE LABEL ENCODER CON TUTTE LE CLASSI
+        if all_classes is not None:
+            # Assicurati che sia un array numpy ordinato
+            self.all_classes = np.array(sorted(set(all_classes)))
+            
+            # Configura il LabelEncoder per conoscere TUTTE le classi possibili
+            self.le.fit(self.all_classes)
+            
+            print(f"📊 CONFIGURAZIONE CLASSI:")
+            print(f"   - Totale classi nel problema: {len(self.all_classes)}")
+            print(f"   - Classi possibili: {list(self.all_classes)}")
+            
+            # Verifica quali classi sono effettivamente nel training
+            unique_train_classes = sorted(np.unique(y_train))
+            print(f"   - Classi nel training set: {unique_train_classes}")
+            
+            # Identifica classi mancanti nel training
+            missing_in_training = set(self.all_classes) - set(unique_train_classes)
+            if missing_in_training:
+                print(f"   ⚠️  CLASSI ASSENTI NEL TRAINING: {sorted(missing_in_training)}")
+                print(f"      (I modelli non potranno predire queste classi direttamente)")
+            
+            # Trasforma i target del training
+            y_tr_enc = self.le.transform(y_train)
+            
+        else:
+            # Modalità standard: usa solo le classi presenti nel training
+            print("⚠️  ATTENZIONE: all_classes non specificato.")
+            print("   I modelli conosceranno solo le classi presenti nel training.")
+            
+            y_tr_enc = self.le.fit_transform(y_train)
+            self.all_classes = self.le.classes_
+            print(f"   Classi trovate: {list(self.le.classes_)}")
         
-        # Aggiorna XGB con num_class corretto
+        # Numero totale di classi per configurare i modelli
+        n_classes = len(self.le.classes_)
+        print(f"\n📈 Configurazione modelli per {n_classes} classi totali")
+        
+        # IMPORTANTE: Configura XGBoost con il numero corretto di classi
         self.xgb.named_steps["model"].num_class = n_classes
         
-        # Salva per uso successivo
+        # Per alcuni modelli potrebbe essere necessario configurare parametri aggiuntivi
+        # per gestire classi sbilanciate o mancanti
+        
+        # Salva dati per uso successivo
         self.X_train = X_train
         self.y_train = y_train
         self.y_tr_enc = y_tr_enc
         self.feature_names = feature_names
         
-        # Training di tutti i modelli
+        # Configurazione modelli da addestrare
         models_config = [
             ("RandomForest", self.rf, self.rf_param_dist, 25),
             ("HistGradientBoosting", self.hgb, self.hgb_param_dist, 25),
@@ -284,11 +324,25 @@ class ModelSelectorClassification:
             ("LogReg_ElasticNet", self.elastic, self.elastic_param_dist, 15),
         ]
         
-        for name, model, param_dist, n_iter in models_config:
-            self.searches[name] = self._fit_search(name, model, param_dist, X_train, y_tr_enc, n_iter)
+        print(f"\n🚀 Avvio training di {len(models_config)} modelli...")
+        print("-" * 60)
         
-        # Confronto finale cross-validation
+        # Training di tutti i modelli
+        for name, model, param_dist, n_iter in models_config:
+            try:
+                self.searches[name] = self._fit_search(
+                    name, model, param_dist, X_train, y_tr_enc, n_iter
+                )
+            except Exception as e:
+                print(f"❌ Errore nel training di {name}: {str(e)}")
+                continue
+        
+        # Stampa risultati finali della cross-validation
         self._print_cv_results()
+        
+        print("\n" + "=" * 60)
+        print("✅ TRAINING COMPLETATO")
+        print("=" * 60)
     
     def _print_cv_results(self):
         """Stampa i risultati della cross-validation."""
@@ -949,4 +1003,164 @@ class ModelSelectorClassification:
         
         return report
 
-
+    def plot_confusion_matrices(self, figsize=(20, 12), cmap='Blues', normalize=False):
+        """
+        Visualizza graficamente tutte le confusion matrix dei modelli.
+        
+        Args:
+            figsize: Dimensione della figura (larghezza, altezza)
+            cmap: Colormap da utilizzare ('Blues', 'RdYlGn_r', 'viridis', etc.)
+            normalize: Se True, mostra percentuali invece dei conteggi
+        """
+        if not hasattr(self, 'conf_matrices'):
+            raise ValueError("Esegui prima evaluate_all() per generare le confusion matrix")
+        
+        # Calcola layout ottimale
+        n_models = len(self.conf_matrices)
+        n_cols = min(3, n_models)  # Massimo 3 colonne
+        n_rows = (n_models + n_cols - 1) // n_cols
+        
+        # Crea figura
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize)
+        
+        # Assicurati che axes sia sempre un array
+        if n_models == 1:
+            axes = np.array([axes])
+        elif n_rows == 1:
+            axes = axes.reshape(1, -1)
+        elif n_cols == 1:
+            axes = axes.reshape(-1, 1)
+        
+        # Plot per ogni modello
+        for idx, (model_name, cm_data) in enumerate(self.conf_matrices.items()):
+            row = idx // n_cols
+            col = idx % n_cols
+            ax = axes[row, col] if n_rows > 1 else axes[col]
+            
+            # Estrai dati
+            labels = cm_data['labels']
+            cm_to_plot = cm_data['normalized'] if normalize else cm_data['raw']
+            
+            # Crea heatmap usando seaborn per maggiore controllo
+            sns.heatmap(
+                cm_to_plot,
+                annot=True,
+                fmt='.1%' if normalize else 'd',
+                cmap=cmap,
+                square=True,
+                cbar=False,  # Disabilita colorbar individuale
+                vmin=0,
+                vmax=1 if normalize else None,
+                xticklabels=labels,
+                yticklabels=labels,
+                ax=ax,
+                linewidths=0.5,
+                linecolor='gray'
+            )
+            
+            # Ottieni accuracy del modello
+            model_accuracy = next(
+                (r['accuracy'] for r in self.val_results if r['model'] == model_name),
+                0
+            )
+            
+            # Titolo con nome modello e accuracy
+            ax.set_title(
+                f'{model_name}\nAccuracy: {model_accuracy:.3f}',
+                fontsize=11,
+                fontweight='bold',
+                pad=10
+            )
+            
+            # Label degli assi
+            ax.set_xlabel('Predicted Class', fontsize=9)
+            ax.set_ylabel('True Class', fontsize=9)
+            
+            # Ruota le label per leggibilità
+            ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right')
+            ax.set_yticklabels(ax.get_yticklabels(), rotation=0)
+            
+            # Aggiungi griglia per separare meglio le celle
+            ax.tick_params(axis='both', which='major', labelsize=8)
+        
+        # Rimuovi subplot vuoti
+        for idx in range(n_models, n_rows * n_cols):
+            row = idx // n_cols
+            col = idx % n_cols
+            ax = axes[row, col] if n_rows > 1 else axes[col]
+            fig.delaxes(ax)
+        
+        # Aggiungi una colorbar comune a destra
+        if n_models > 0:
+            # Crea un mappable per la colorbar
+            from matplotlib.cm import ScalarMappable
+            from matplotlib.colors import Normalize
+            
+            norm = Normalize(vmin=0, vmax=1 if normalize else cm_data['raw'].max())
+            sm = ScalarMappable(norm=norm, cmap=cmap)
+            sm.set_array([])
+            
+            # Aggiungi colorbar
+            cbar = fig.colorbar(
+                sm,
+                ax=axes.ravel().tolist(),
+                orientation='vertical',
+                fraction=0.02,
+                pad=0.02
+            )
+            cbar.set_label(
+                'Accuracy per Class' if normalize else 'Number of Samples',
+                rotation=270,
+                labelpad=20,
+                fontsize=10
+            )
+        
+        # Titolo generale
+        title_text = 'Confusion Matrices - All Models'
+        if normalize:
+            title_text += ' (Normalized)'
+        
+        plt.suptitle(
+            title_text,
+            fontsize=14,
+            fontweight='bold',
+            y=1.02
+        )
+        
+        # Layout ottimizzato
+        plt.tight_layout(rect=[0, 0, 0.96, 0.96])
+        
+        # Mostra
+        plt.show()
+        
+        # Stampa sommario
+        print("\n" + "=" * 60)
+        print("SOMMARIO CONFUSION MATRICES")
+        print("=" * 60)
+        
+        for model_name, cm_data in self.conf_matrices.items():
+            labels = cm_data['labels']
+            cm_raw = cm_data['raw']
+            
+            # Calcola metriche per modello
+            total_correct = np.trace(cm_raw)
+            total_samples = cm_raw.sum()
+            accuracy = total_correct / total_samples if total_samples > 0 else 0
+            
+            # Identifica classi problematiche
+            class_accuracies = []
+            for i, label in enumerate(labels):
+                row_sum = cm_raw[i].sum()
+                if row_sum > 0:
+                    class_acc = cm_raw[i, i] / row_sum
+                    class_accuracies.append((label, class_acc, row_sum))
+            
+            # Trova classi peggiori
+            worst_classes = sorted(class_accuracies, key=lambda x: x[1])[:3]
+            
+            print(f"\n{model_name}:")
+            print(f"  Overall Accuracy: {accuracy:.3f}")
+            print(f"  Classi più problematiche:")
+            for cls, acc, n_samples in worst_classes:
+                if acc < 0.8:  # Solo se accuracy < 80%
+                    print(f"    - Classe {cls}: {acc:.1%} accuracy ({n_samples} campioni)")
