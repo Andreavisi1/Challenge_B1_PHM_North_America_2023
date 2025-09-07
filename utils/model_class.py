@@ -465,15 +465,17 @@ class ModelSelectorClassification:
             
             est = search.best_estimator_
             
+            if hasattr(X_val, 'columns'):
+                X_val_array = X_val.values
+            else:
+                X_val_array = X_val
+            
             # Valutazione metriche standard
-            res = self.evaluate(est, X_val, y_val, name, print_cm=False, print_report=False)
+            res = self.evaluate(est, X_val_array, y_val, name, print_cm=False, print_report=False)
             self.val_results.append(res)
             
-            try:
-                y_pred = est.predict(X_val)
-            except Exception as e:
-                print(f"❌ Errore nelle predizioni: {e}")
-                continue
+            # CORREZIONE: usa y_pred dal risultato di evaluate
+            y_pred = res['y_pred']  # Usa questo invece di ripredire
             
             # GESTIONE INTELLIGENTE DELLE CLASSI
             pred_classes = sorted(np.unique(y_pred))
@@ -491,25 +493,25 @@ class ModelSelectorClassification:
             missing_in_pred = set(val_classes) - set(pred_classes)
             if missing_in_pred:
                 print(f"   ⚠️  Classi MAI predette: {sorted(missing_in_pred)}")
-                
-            # USA TUTTE LE CLASSI PRESENTI (unione di val e pred)
-            all_classes = sorted(set(val_classes) | set(pred_classes))
             
-            # Calcola confusion matrix con TUTTE le classi
+            # CORREZIONE PRINCIPALE: usa solo le classi del validation
+            # Non includere classi spurie che potrebbero apparire nelle predizioni
+            labels_for_matrix = val_classes  # USA SOLO LE CLASSI DEL VALIDATION
+            
+            # Calcola confusion matrix con le classi del validation
             from sklearn.metrics import confusion_matrix
-            cm_raw = confusion_matrix(y_val, y_pred, labels=all_classes)
+            cm_raw = confusion_matrix(y_val, y_pred, labels=labels_for_matrix)
             
             # Normalizzazione per riga (percentuali per classe vera)
             with np.errstate(invalid='ignore', divide='ignore'):
                 cm_norm = cm_raw.astype(float).copy()
                 row_sums = cm_norm.sum(axis=1, keepdims=True)
-                # Evita divisione per zero
                 row_sums[row_sums == 0] = 1
                 cm_norm = cm_norm / row_sums
             
             # Salva per uso futuro
             self.conf_matrices[name] = {
-                "labels": all_classes,
+                "labels": labels_for_matrix,  # Usa labels_for_matrix invece di all_classes
                 "raw": cm_raw,
                 "normalized": cm_norm
             }
@@ -518,63 +520,53 @@ class ModelSelectorClassification:
             
             # 1. Matrice RAW (conteggi)
             print(f"\n   📋 Confusion Matrix (conteggi)")
-            print(f"   " + "-"*35)
+            print(f"   " + "-"*50)
             
             # Header
-            header = "TRUE\\PRED"
-            for cls in all_classes:
+            header = "   TRUE\\PRED"
+            for cls in labels_for_matrix:
                 header += f"{cls:>6}"
-            print(f"   {header}")
-            print(f"   " + "-"*35)
+            print(header)
+            print(f"   " + "-"*50)
             
             # Righe
-            for i, true_cls in enumerate(all_classes):
+            for i, true_cls in enumerate(labels_for_matrix):
                 row = f"   {true_cls:>9}"
-                for j, pred_cls in enumerate(all_classes):
+                for j, pred_cls in enumerate(labels_for_matrix):
                     count = cm_raw[i, j]
                     if count == 0:
-                        row += f"{'·':>6}"  # Punto per gli zeri (più pulito)
-                    elif i == j:  # Diagonale (corretti)
-                        row += f"\033[92m{count:>6}\033[0m"  # Verde per i corretti
+                        row += f"{'·':>6}"
                     else:
-                        row += f"\033[91m{count:>6}\033[0m"  # Rosso per gli errori
+                        row += f"{count:>6}"
                 print(row)
             
             # 2. Matrice NORMALIZZATA (percentuali)
             print(f"\n   📊 Confusion Matrix (percentuali per riga)")
-            print(f"   " + "-"*35)
+            print(f"   " + "-"*50)
             
             # Header
-            header = "TRUE\\PRED"
-            for cls in all_classes:
+            header = "   TRUE\\PRED"
+            for cls in labels_for_matrix:
                 header += f"{cls:>7}"
-            print(f"   {header}")
-            print(f"   " + "-"*35)
+            print(header)
+            print(f"   " + "-"*50)
             
             # Righe
-            for i, true_cls in enumerate(all_classes):
+            for i, true_cls in enumerate(labels_for_matrix):
                 row = f"   {true_cls:>9}"
-                for j, pred_cls in enumerate(all_classes):
+                for j, pred_cls in enumerate(labels_for_matrix):
                     val = cm_norm[i, j]
                     if val == 0:
                         row += f"{'·':>7}"
-                    elif i == j:  # Diagonale
-                        if val >= 0.9:
-                            row += f"\033[92m{val:>6.1%}\033[0m "  # Verde brillante se >= 90%
-                        else:
-                            row += f"\033[93m{val:>6.1%}\033[0m "  # Giallo se < 90%
                     else:
-                        if val >= 0.1:
-                            row += f"\033[91m{val:>6.1%}\033[0m "  # Rosso se errore significativo
-                        else:
-                            row += f"{val:>6.1%} "  # Normale se errore piccolo
+                        row += f"{val:>6.1%} "
                 print(row)
             
             # 3. Analisi degli errori principali
             print(f"\n   🎯 Analisi errori principali:")
             errors = []
-            for i, true_cls in enumerate(all_classes):
-                for j, pred_cls in enumerate(all_classes):
+            for i, true_cls in enumerate(labels_for_matrix):
+                for j, pred_cls in enumerate(labels_for_matrix):
                     if i != j and cm_raw[i, j] > 0:
                         errors.append((true_cls, pred_cls, cm_raw[i, j], cm_norm[i, j]))
             
@@ -587,7 +579,7 @@ class ModelSelectorClassification:
             
             # 4. Performance per classe
             print(f"\n   📈 Performance per classe:")
-            for i, cls in enumerate(all_classes):
+            for i, cls in enumerate(labels_for_matrix):
                 total = cm_raw[i].sum()
                 if total > 0:
                     correct = cm_raw[i, i]
@@ -607,7 +599,7 @@ class ModelSelectorClassification:
                     print(f"      {emoji} Classe {cls}: {correct}/{total} corretti ({accuracy:.1%}) - {predicted_as_this} predetti come {cls}")
                 else:
                     print(f"      ⚪ Classe {cls}: nessun campione nel validation")
-        
+            
         # ===== ANALISI COMPARATIVA FINALE =====
         print(f"\n{'='*60}")
         print("📊 ANALISI COMPARATIVA")
@@ -615,9 +607,9 @@ class ModelSelectorClassification:
         
         self._analyze_results()
         
-        # Trova il miglior modello
+        # Trova il miglior modello  
         best_idx = np.argmax([r['accuracy'] for r in self.val_results])
-        best_model = self.val_results[best_idx]['model']
+        best_model = self.val_results[best_idx]['name']  # CORREZIONE: usa 'name' non 'model'
         best_acc = self.val_results[best_idx]['accuracy']
         
         print(f"\n🏆 MIGLIOR MODELLO: {best_model}")
@@ -636,7 +628,7 @@ class ModelSelectorClassification:
             else:
                 medal = f"{i}."
                 
-            print(f"   {medal} {res['model']:<25} Acc: {res['accuracy']:.4f}  F1: {res['f1_macro']:.4f}")
+            print(f"   {medal} {res['name']:<25} Acc: {res['accuracy']:.4f}  F1: {res['f1_macro']:.4f}")
         
         return self.val_results
     
@@ -782,7 +774,6 @@ class ModelSelectorClassification:
 
         return model_filename
 
-    
     def load_model(self, model_path, metadata_path=None):
         """Carica un modello salvato."""
         model = joblib.load(model_path)
@@ -1006,18 +997,13 @@ class ModelSelectorClassification:
     def plot_confusion_matrices(self, figsize=(20, 12), cmap='Blues', normalize=False):
         """
         Visualizza graficamente tutte le confusion matrix dei modelli.
-        
-        Args:
-            figsize: Dimensione della figura (larghezza, altezza)
-            cmap: Colormap da utilizzare ('Blues', 'RdYlGn_r', 'viridis', etc.)
-            normalize: Se True, mostra percentuali invece dei conteggi
         """
         if not hasattr(self, 'conf_matrices'):
             raise ValueError("Esegui prima evaluate_all() per generare le confusion matrix")
         
         # Calcola layout ottimale
         n_models = len(self.conf_matrices)
-        n_cols = min(3, n_models)  # Massimo 3 colonne
+        n_cols = min(3, n_models)
         n_rows = (n_models + n_cols - 1) // n_cols
         
         # Crea figura
@@ -1041,14 +1027,14 @@ class ModelSelectorClassification:
             labels = cm_data['labels']
             cm_to_plot = cm_data['normalized'] if normalize else cm_data['raw']
             
-            # Crea heatmap usando seaborn per maggiore controllo
+            # Crea heatmap
             sns.heatmap(
                 cm_to_plot,
                 annot=True,
                 fmt='.1%' if normalize else 'd',
                 cmap=cmap,
                 square=True,
-                cbar=False,  # Disabilita colorbar individuale
+                cbar=False,
                 vmin=0,
                 vmax=1 if normalize else None,
                 xticklabels=labels,
@@ -1058,9 +1044,9 @@ class ModelSelectorClassification:
                 linecolor='gray'
             )
             
-            # Ottieni accuracy del modello
+            # CORREZIONE: usa 'name' invece di 'model'
             model_accuracy = next(
-                (r['accuracy'] for r in self.val_results if r['model'] == model_name),
+                (r['accuracy'] for r in self.val_results if r['name'] == model_name),  # <-- USA 'name'
                 0
             )
             
@@ -1090,9 +1076,8 @@ class ModelSelectorClassification:
             ax = axes[row, col] if n_rows > 1 else axes[col]
             fig.delaxes(ax)
         
-        # Aggiungi una colorbar comune a destra
+        # Aggiungi una colorbar comune
         if n_models > 0:
-            # Crea un mappable per la colorbar
             from matplotlib.cm import ScalarMappable
             from matplotlib.colors import Normalize
             
@@ -1100,7 +1085,6 @@ class ModelSelectorClassification:
             sm = ScalarMappable(norm=norm, cmap=cmap)
             sm.set_array([])
             
-            # Aggiungi colorbar
             cbar = fig.colorbar(
                 sm,
                 ax=axes.ravel().tolist(),
@@ -1127,40 +1111,146 @@ class ModelSelectorClassification:
             y=1.02
         )
         
-        # Layout ottimizzato
         plt.tight_layout(rect=[0, 0, 0.96, 0.96])
+        plt.show()
+
+    def plot_final_comparison(self, figsize=(16, 10)):
+        """
+        Crea un plot comparativo completo dei risultati finali.
+        """
+        if not hasattr(self, 'combined_results'):
+            raise ValueError("Esegui prima evaluate_all()")
         
-        # Mostra
+        fig = plt.figure(figsize=figsize)
+        
+        # Layout: 2x2 grid
+        gs = fig.add_gridspec(2, 2, hspace=0.3, wspace=0.3)
+        
+        # 1. Comparison CV vs Validation Accuracy
+        ax1 = fig.add_subplot(gs[0, 0])
+        models = self.combined_results['Model'].values
+        cv_scores = self.combined_results['CV_Score'].values
+        val_scores = self.combined_results['Val_Accuracy'].values
+        
+        x = np.arange(len(models))
+        width = 0.35
+        
+        bars1 = ax1.bar(x - width/2, cv_scores, width, label='CV Score', 
+                        color='skyblue', edgecolor='black', linewidth=1)
+        bars2 = ax1.bar(x + width/2, val_scores, width, label='Validation Score',
+                        color='lightcoral', edgecolor='black', linewidth=1)
+        
+        # Aggiungi valori sopra le barre
+        for bar in bars1:
+            height = bar.get_height()
+            ax1.text(bar.get_x() + bar.get_width()/2., height,
+                    f'{height:.3f}', ha='center', va='bottom', fontsize=8)
+        for bar in bars2:
+            height = bar.get_height()
+            ax1.text(bar.get_x() + bar.get_width()/2., height,
+                    f'{height:.3f}', ha='center', va='bottom', fontsize=8)
+        
+        ax1.set_xlabel('Models', fontweight='bold')
+        ax1.set_ylabel('Accuracy', fontweight='bold')
+        ax1.set_title('Cross-Validation vs Validation Accuracy', fontweight='bold', fontsize=12)
+        ax1.set_xticks(x)
+        ax1.set_xticklabels(models, rotation=45, ha='right')
+        ax1.legend()
+        ax1.grid(axis='y', alpha=0.3)
+        ax1.set_ylim([0, 1.05])
+        
+        # 2. F1 Scores Comparison
+        ax2 = fig.add_subplot(gs[0, 1])
+        f1_macro = self.combined_results['Val_F1_Macro'].values
+        
+        colors = plt.cm.viridis(np.linspace(0.3, 0.9, len(models)))
+        bars = ax2.barh(models, f1_macro, color=colors, edgecolor='black', linewidth=1)
+        
+        # Aggiungi valori
+        for i, (bar, score) in enumerate(zip(bars, f1_macro)):
+            ax2.text(score + 0.005, bar.get_y() + bar.get_height()/2,
+                    f'{score:.3f}', va='center', fontsize=9)
+        
+        ax2.set_xlabel('F1 Macro Score', fontweight='bold')
+        ax2.set_title('F1 Macro Score by Model', fontweight='bold', fontsize=12)
+        ax2.set_xlim([0, 1.05])
+        ax2.grid(axis='x', alpha=0.3)
+        
+        # 3. Ranking Plot
+        ax3 = fig.add_subplot(gs[1, 0])
+        
+        # Crea scatter plot per i ranking
+        cv_rank = self.combined_results['CV_Rank'].values
+        val_rank = self.combined_results['Val_Rank'].values
+        
+        # Colora in base al ranking medio
+        avg_rank = self.combined_results['Avg_Rank'].values
+        scatter = ax3.scatter(cv_rank, val_rank, s=200, c=avg_rank, 
+                            cmap='RdYlGn_r', edgecolor='black', linewidth=2,
+                            alpha=0.7)
+        
+        # Aggiungi etichette
+        for i, model in enumerate(models):
+            ax3.annotate(model, (cv_rank[i], val_rank[i]), 
+                        fontsize=8, ha='center', va='center')
+        
+        # Aggiungi linea diagonale
+        ax3.plot([0, 9], [0, 9], 'k--', alpha=0.3, label='Perfect Agreement')
+        
+        ax3.set_xlabel('CV Rank', fontweight='bold')
+        ax3.set_ylabel('Validation Rank', fontweight='bold')
+        ax3.set_title('Model Rankings: CV vs Validation', fontweight='bold', fontsize=12)
+        ax3.grid(True, alpha=0.3)
+        ax3.legend()
+        
+        # Colorbar
+        cbar = plt.colorbar(scatter, ax=ax3)
+        cbar.set_label('Average Rank', rotation=270, labelpad=15)
+        
+        # 4. Performance Stability
+        ax4 = fig.add_subplot(gs[1, 1])
+        
+        # Calcola differenza tra CV e Validation
+        diff = val_scores - cv_scores
+        
+        # Colora in base alla differenza
+        colors_diff = ['green' if abs(d) < 0.02 else 'orange' if d > 0 else 'red' 
+                    for d in diff]
+        
+        bars = ax4.bar(models, diff, color=colors_diff, edgecolor='black', linewidth=1)
+        
+        # Aggiungi valori
+        for bar, d in zip(bars, diff):
+            ax4.text(bar.get_x() + bar.get_width()/2, bar.get_height(),
+                    f'{d:+.3f}', ha='center', va='bottom' if d > 0 else 'top',
+                    fontsize=8)
+        
+        ax4.axhline(y=0, color='black', linestyle='-', linewidth=0.5)
+        ax4.set_xlabel('Models', fontweight='bold')
+        ax4.set_ylabel('Difference (Val - CV)', fontweight='bold')
+        ax4.set_title('Model Stability (Validation - CV Score)', fontweight='bold', fontsize=12)
+        ax4.set_xticklabels(models, rotation=45, ha='right')
+        ax4.grid(axis='y', alpha=0.3)
+        
+        # Aggiungi zone colorate
+        ax4.axhspan(-0.02, 0.02, alpha=0.2, color='green', label='Stable (±0.02)')
+        ax4.axhspan(0.02, 0.1, alpha=0.2, color='orange', label='Possible Overfit')
+        ax4.axhspan(-0.1, -0.02, alpha=0.2, color='red', label='Underfit')
+        ax4.legend(loc='upper right', fontsize=8)
+        
+        # Titolo generale
+        fig.suptitle('Model Performance Comparison - Complete Analysis', 
+                    fontsize=14, fontweight='bold', y=1.02)
+        
+        plt.tight_layout()
         plt.show()
         
-        # Stampa sommario
-        print("\n" + "=" * 60)
-        print("SOMMARIO CONFUSION MATRICES")
-        print("=" * 60)
-        
-        for model_name, cm_data in self.conf_matrices.items():
-            labels = cm_data['labels']
-            cm_raw = cm_data['raw']
-            
-            # Calcola metriche per modello
-            total_correct = np.trace(cm_raw)
-            total_samples = cm_raw.sum()
-            accuracy = total_correct / total_samples if total_samples > 0 else 0
-            
-            # Identifica classi problematiche
-            class_accuracies = []
-            for i, label in enumerate(labels):
-                row_sum = cm_raw[i].sum()
-                if row_sum > 0:
-                    class_acc = cm_raw[i, i] / row_sum
-                    class_accuracies.append((label, class_acc, row_sum))
-            
-            # Trova classi peggiori
-            worst_classes = sorted(class_accuracies, key=lambda x: x[1])[:3]
-            
-            print(f"\n{model_name}:")
-            print(f"  Overall Accuracy: {accuracy:.3f}")
-            print(f"  Classi più problematiche:")
-            for cls, acc, n_samples in worst_classes:
-                if acc < 0.8:  # Solo se accuracy < 80%
-                    print(f"    - Classe {cls}: {acc:.1%} accuracy ({n_samples} campioni)")
+        # Stampa best model
+        print("\n" + "="*60)
+        print("📊 SUMMARY")
+        print("="*60)
+        best_model = self.combined_results.iloc[0]
+        print(f"🏆 Best Model: {best_model['Model']}")
+        print(f"   - CV Score: {best_model['CV_Score']:.4f} ± {best_model['CV_Std']:.4f}")
+        print(f"   - Validation Accuracy: {best_model['Val_Accuracy']:.4f}")
+        print(f"   - F1 Macro: {best_model['Val_F1_Macro']:.4f}")
