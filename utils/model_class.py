@@ -997,6 +997,11 @@ class ModelSelectorClassification:
     def plot_confusion_matrices(self, figsize=(20, 12), cmap='Blues', normalize=False):
         """
         Visualizza graficamente tutte le confusion matrix dei modelli.
+        
+        Args:
+            figsize: Dimensione della figura (larghezza, altezza)
+            cmap: Colormap da utilizzare ('Blues', 'RdYlGn_r', 'viridis', etc.)
+            normalize: Se True, mostra percentuali invece dei conteggi
         """
         if not hasattr(self, 'conf_matrices'):
             raise ValueError("Esegui prima evaluate_all() per generare le confusion matrix")
@@ -1009,19 +1014,25 @@ class ModelSelectorClassification:
         # Crea figura
         fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize)
         
-        # Assicurati che axes sia sempre un array
+        # Assicurati che axes sia sempre un array 2D
         if n_models == 1:
-            axes = np.array([axes])
+            axes = np.array([[axes]])
         elif n_rows == 1:
             axes = axes.reshape(1, -1)
         elif n_cols == 1:
             axes = axes.reshape(-1, 1)
         
+        # Variabile per salvare l'ultima confusion matrix per la colorbar
+        last_cm_data = None
+        
         # Plot per ogni modello
         for idx, (model_name, cm_data) in enumerate(self.conf_matrices.items()):
             row = idx // n_cols
             col = idx % n_cols
-            ax = axes[row, col] if n_rows > 1 else axes[col]
+            ax = axes[row, col]
+            
+            # Salva l'ultima cm_data per la colorbar
+            last_cm_data = cm_data
             
             # Estrai dati
             labels = cm_data['labels']
@@ -1034,7 +1045,7 @@ class ModelSelectorClassification:
                 fmt='.1%' if normalize else 'd',
                 cmap=cmap,
                 square=True,
-                cbar=False,
+                cbar=False,  # Disabilita colorbar individuale
                 vmin=0,
                 vmax=1 if normalize else None,
                 xticklabels=labels,
@@ -1044,9 +1055,9 @@ class ModelSelectorClassification:
                 linecolor='gray'
             )
             
-            # CORREZIONE: usa 'name' invece di 'model'
+            # Ottieni accuracy del modello
             model_accuracy = next(
-                (r['accuracy'] for r in self.val_results if r['name'] == model_name),  # <-- USA 'name'
+                (r['accuracy'] for r in self.val_results if r['name'] == model_name),
                 0
             )
             
@@ -1066,38 +1077,69 @@ class ModelSelectorClassification:
             ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right')
             ax.set_yticklabels(ax.get_yticklabels(), rotation=0)
             
-            # Aggiungi griglia per separare meglio le celle
+            # Tick parameters
             ax.tick_params(axis='both', which='major', labelsize=8)
         
-        # Rimuovi subplot vuoti
+        # Gestione subplot vuoti e colorbar
         for idx in range(n_models, n_rows * n_cols):
             row = idx // n_cols
             col = idx % n_cols
-            ax = axes[row, col] if n_rows > 1 else axes[col]
-            fig.delaxes(ax)
-        
-        # Aggiungi una colorbar comune
-        if n_models > 0:
-            from matplotlib.cm import ScalarMappable
-            from matplotlib.colors import Normalize
+            ax = axes[row, col]
             
-            norm = Normalize(vmin=0, vmax=1 if normalize else cm_data['raw'].max())
-            sm = ScalarMappable(norm=norm, cmap=cmap)
-            sm.set_array([])
-            
-            cbar = fig.colorbar(
-                sm,
-                ax=axes.ravel().tolist(),
-                orientation='vertical',
-                fraction=0.02,
-                pad=0.02
-            )
-            cbar.set_label(
-                'Accuracy per Class' if normalize else 'Number of Samples',
-                rotation=270,
-                labelpad=20,
-                fontsize=10
-            )
+            # Se è l'ultimo subplot (in basso a destra) e abbiamo dei dati
+            if idx == n_rows * n_cols - 1 and last_cm_data is not None:
+                # Mantieni l'asse ma rendilo invisibile
+                ax.set_visible(False)
+                
+                # Crea la colorbar in questa posizione
+                from matplotlib.cm import ScalarMappable
+                from matplotlib.colors import Normalize
+                
+                # Determina i valori min/max per la normalizzazione
+                if normalize:
+                    vmin, vmax = 0, 1
+                else:
+                    vmax = max(cm['raw'].max() for cm in self.conf_matrices.values())
+                    vmin = 0
+                
+                # Crea un oggetto mappabile per la colorbar
+                norm = Normalize(vmin=vmin, vmax=vmax)
+                sm = ScalarMappable(norm=norm, cmap=cmap)
+                sm.set_array([])
+                
+                # Ottieni la posizione del subplot vuoto
+                pos = ax.get_position()
+                
+                # Crea un nuovo asse per la colorbar nel subplot vuoto
+                # Posizionalo al centro del riquadro vuoto
+                cbar_width = 0.02
+                cbar_height = pos.height * 0.6
+                cbar_left = pos.x0 + (pos.width - cbar_width) / 2
+                cbar_bottom = pos.y0 + (pos.height - cbar_height) / 2
+                
+                cbar_ax = fig.add_axes([cbar_left, cbar_bottom, cbar_width, cbar_height])
+                
+                # Aggiungi la colorbar
+                cbar = fig.colorbar(sm, cax=cbar_ax)
+                cbar.set_label(
+                    'Accuracy per Class' if normalize else 'Number of Samples',
+                    rotation=270,
+                    labelpad=20,
+                    fontsize=10
+                )
+                
+                # Aggiungi un testo descrittivo sotto la colorbar
+                fig.text(
+                    cbar_left + cbar_width/2,
+                    cbar_bottom - 0.03,
+                    'Scale',
+                    ha='center',
+                    fontsize=9,
+                    fontweight='bold'
+                )
+            else:
+                # Rimuovi completamente gli altri subplot vuoti
+                fig.delaxes(ax)
         
         # Titolo generale
         title_text = 'Confusion Matrices - All Models'
@@ -1108,13 +1150,48 @@ class ModelSelectorClassification:
             title_text,
             fontsize=14,
             fontweight='bold',
-            y=1.02
+            y=0.98
         )
         
-        plt.tight_layout(rect=[0, 0, 0.96, 0.96])
+        # Layout ottimizzato
+        plt.tight_layout(rect=[0, 0, 1, 0.96])
+        
+        # Mostra la figura
         plt.show()
+        
+        # Stampa sommario (opzionale)
+        if len(self.conf_matrices) > 0:
+            print("\n" + "=" * 60)
+            print("SOMMARIO CONFUSION MATRICES")
+            print("=" * 60)
+            
+            for model_name, cm_data in self.conf_matrices.items():
+                labels = cm_data['labels']
+                cm_raw = cm_data['raw']
+                
+                # Calcola metriche
+                total_correct = np.trace(cm_raw)
+                total_samples = cm_raw.sum()
+                accuracy = total_correct / total_samples if total_samples > 0 else 0
+                
+                print(f"\n{model_name}:")
+                print(f"  Overall Accuracy: {accuracy:.3f}")
+                
+                # Identifica classi con performance peggiore
+                worst_classes = []
+                for i, label in enumerate(labels):
+                    row_sum = cm_raw[i].sum()
+                    if row_sum > 0:
+                        class_acc = cm_raw[i, i] / row_sum
+                        if class_acc < 0.8:  # Solo classi con accuracy < 80%
+                            worst_classes.append((label, class_acc))
+                
+                if worst_classes:
+                    print("  Classi problematiche:")
+                    for cls, acc in sorted(worst_classes, key=lambda x: x[1]):
+                        print(f"    - Classe {cls}: {acc:.1%} accuracy")
 
-    def plot_final_comparison(self, figsize=(16, 10)):
+    def plot_final_comparison(self, figsize=(26, 20)):
         """
         Crea un plot comparativo completo dei risultati finali.
         """
