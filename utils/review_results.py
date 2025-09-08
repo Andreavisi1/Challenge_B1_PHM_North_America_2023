@@ -136,7 +136,7 @@ def plot_submission(df: pd.DataFrame,
     ax.grid(True, alpha=0.3)
 
     # 3) (opzionale) Distribuzione confidence
-    if has_conf:
+    '''if has_conf:
         conf_counts = df[conf_col].value_counts().sort_index()
         labels = ['Low', 'High']
         sizes = [int(conf_counts.get(0, 0)), int(conf_counts.get(1, 0))]
@@ -149,7 +149,7 @@ def plot_submission(df: pd.DataFrame,
             startangle=90,
             textprops={'color': "black"}
         )
-        ax.set_title('Distribuzione Confidence')
+        ax.set_title('Distribuzione Confidence')'''
 
 
     # 4)Max prob per confidence
