@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Sequence, Tuple
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -8,6 +8,7 @@ from numpy.typing import NDArray
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
 
+from sklearn.neighbors import NearestNeighbors
 
 class SubmissionGenerator:
     """
@@ -23,6 +24,10 @@ class SubmissionGenerator:
         self.detectors: Dict[int, IsolationForest] = {}
         self.missing_map: Dict[int, int | Tuple[int, int]] = {4: 5, 6: 7, 8: (9, 10)}
         self.scaler: StandardScaler | None = None
+        self.knn_by_class: Dict[int, Any] = {}
+        self.k_for_knn: int = 15  # tunabile
+        self.knn_metric: str = "euclidean"
+
 
     # --------------------------
     # Utility per il modello
@@ -79,104 +84,198 @@ class SubmissionGenerator:
 
         return any(req in model_name for req in scaling_models)
 
-    # --------------------------
-    # Anomaly detectors & transfers
-    # --------------------------
+    # ------------------------------------------------------------
+    # TRAIN: scaler, centroidi, anomaly detectors
+    # ------------------------------------------------------------
     def build_anomaly_detectors(
         self,
         X_tr: NDArray,
         y_tr: NDArray,
         contamination: float = 0.05,
     ) -> None:
-        """
-        Costruisce IsolationForest per le classi 4, 6, 8 (se presenti e con campioni sufficienti).
-        """
+        # 1) Scala i dati
         scaler = StandardScaler().fit(X_tr)
         X_scaled = scaler.transform(X_tr)
         self.scaler = scaler
 
-        self.detectors.clear()
+        # 2) Centroidi per fallback
+        self.centroids_ = {}
+        unique_classes = np.unique(y_tr)
+        for cls in unique_classes:
+            mask = (y_tr == cls)
+            if np.any(mask):
+                self.centroids_[int(cls)] = np.mean(X_scaled[mask], axis=0)
+
+        # 3) IsolationForest per 4,6,8 (se campioni sufficienti)
+        self.detectors: Dict[int, IsolationForest] = {}
         for cls in (4, 6, 8):
             mask = (y_tr == cls)
             if not np.any(mask):
                 continue
             X_cls = X_scaled[mask]
-            if len(X_cls) < 10:  # troppo pochi campioni per un detector affidabile
+            if len(X_cls) < 10:
                 continue
             det = IsolationForest(
                 contamination=contamination,
                 random_state=self.rng_seed,
                 n_jobs=-1,
             ).fit(X_cls)
-            self.detectors[cls] = det
+            self.detectors[int(cls)] = det
 
     def apply_transfers(
         self,
         probs: NDArray,
         X_test: NDArray,
         alpha: float = 0.3,
-    ) -> Dict[str, int] | Tuple[Dict[str, int], NDArray]:
+    ) -> Dict[str, int]:
         """
-        Applica trasferimenti di probabilità basati sui detector.
-        - Classi 4 e 6: trasferisce una quota verso 5 e 7 rispettivamente.
-        - Classe 8: trasferisce verso 9 e 10 con split DINAMICO basato sull'anomalia:
-            a in [0,1] (alto = più anomalo) -> quota_9 = (1 - a), quota_10 = a.
-        
-        CONDIZIONE: Il trasferimento avviene SOLO se la classe di origine (4, 6, o 8) 
-        ha la probabilità più alta per quel campione specifico.
+        Applica trasferimenti guidati da IsolationForest e KNN globale (4,6,8).
+        - niente softmax: pesi normalizzati linearmente
+        - quantità spostata = alpha  * prob(source) solo se la source è argmax
+        Regole:
+        6 -> {5,7}  (somiglianza a 4 → 5, somiglianza a 8 → 7)
+        8 -> {7,9,10}  (vicino a 6 → 7, lontano da {4,6} → 9)
+        4 -> 5
         """
-        if (not hasattr(self, "scaler")) or (not self.detectors):
+        # prerequisiti minimi
+        if not hasattr(self, "scaler") or not self.detectors:
             return {}
-        
+
+        # scala il test come nel train
         Xs = self.scaler.transform(X_test)
-        transfers: Dict[str, int] = {}
-        
+
+        def _accumulate(key: str, val: int, transfers: Dict[str, int]):
+            transfers[key] = transfers.get(key, 0) + int(val)
+
+        # pre-calcolo: anomaly in [0,1] per ogni detector (4,6,8)
+        anomaly_by_cls: Dict[int, NDArray] = {}
         for cls, det in self.detectors.items():
-            # decision_function: più alto = più "normale" -> mappiamo a [0,1] con sigmoide invertita
             s = det.decision_function(Xs)
-            a = 1.0 / (1.0 + np.exp((s - np.median(s)) / (np.std(s) + 1e-6)))  # alto = più anomalo
-            
-            # CONDIZIONE: trasferimento solo se cls è la classe con probabilità massima
-            dominant_mask = probs.argmax(axis=1) == cls
-            
-            if cls in (4, 6):
-                dst = int(self.missing_map[cls])  # 4->5, 6->7
-                moved = alpha * a * probs[:, cls]
-                
-                # Applica trasferimento SOLO ai campioni dove cls è dominante
-                moved = np.where(dominant_mask, moved, 0.0)
-                
-                probs[:, cls] -= moved
-                probs[:, dst] += moved
-                transfers[f"{cls}_to_{dst}"] = int((moved > 0).sum())
-                
-            elif cls == 8:
-                dst9, dst10 = self.missing_map[8]
-                # aumento leggero di alpha come prima (facoltativo)
-                alpha_eff = (alpha + 0.1) if alpha < 0.9 else alpha
-                moved = alpha_eff * a * probs[:, 8]
-                
-                # Applica trasferimento SOLO ai campioni dove classe 8 è dominante
-                moved = np.where(dominant_mask, moved, 0.0)
-                
-                probs[:, 8] -= moved
-                
-                # --- SPLIT DINAMICO:
-                b = 0.9
-                k = 6.0  # pendenza
-                a_tilt = 1/(1 + np.exp(-k*(a - b)))      # sigmoid(a - b)
-                p9 = 1 - a_tilt
-                p10 = a_tilt
-                
-                probs[:, dst9] += p9 * moved
-                probs[:, dst10] += p10 * moved
-                transfers["8_to_9_10"] = int((moved > 0).sum())
+            s_std = (np.std(s) + 1e-6)
+            # più anomalo => valore più vicino a 1
+            anomaly_by_cls[int(cls)] = 1.0 / (1.0 + np.exp((s - np.median(s)) / s_std))
+
+        transfers: Dict[str, int] = {}
+
+        # Soglie specifiche per classe
+        anomaly_thresholds = {}
+        for cls in [4, 6, 8]:
+            if cls in anomaly_by_cls:
+                anomaly_thresholds[cls] = np.percentile(anomaly_by_cls[cls], 25)  # CORREZIONE: 75 per top 25%
+
+        print(f"Anomaly thresholds: {anomaly_thresholds}")
+
+        # PRE-CALCOLO distanze dai centroidi (serve per tutte le classi)
+        all_distances = []
+        for centroid_cls in [4, 6, 8]:
+            if centroid_cls in self.centroids_:
+                dist = np.linalg.norm(Xs - self.centroids_[centroid_cls], axis=1)
+                all_distances.append(dist)
         
-        # clamp & renorm
-        np.maximum(probs, 0.0, out=probs)
-        probs_sum = probs.sum(axis=1, keepdims=True)
-        probs /= np.maximum(probs_sum, 1e-12)
-        
+        mean_dist = None
+        if all_distances:
+            mean_dist = np.mean(all_distances, axis=0)
+
+        # ==========================================
+        # CLASSE 6 -> {5,7}
+        # ==========================================
+        cls = 6
+        if cls in self.detectors and cls in anomaly_thresholds and hasattr(self, 'centroids_'):
+            dom = (probs.argmax(axis=1) == cls)
+            anomaly_mask = anomaly_by_cls[cls] > anomaly_thresholds[cls]
+            combined_mask = dom & anomaly_mask
+
+            # quantità da spostare SOLO per campioni anomali
+            total_moved = np.where(combined_mask, alpha * probs[:, cls], 0.0)
+
+            if mean_dist is not None and combined_mask.any():
+                # Calcola p50 solo sui campioni che verranno effettivamente trasferiti
+                p50 = np.percentile(mean_dist[combined_mask], 50)
+
+                # Maschere di destinazione calcolate SOLO sul subset dei campioni anomali
+                to_5_mask = np.zeros_like(combined_mask, dtype=bool)
+                to_7_mask = np.zeros_like(combined_mask, dtype=bool)
+                
+                to_5_mask[combined_mask] = mean_dist[combined_mask] <= p50
+                to_7_mask[combined_mask] = mean_dist[combined_mask] > p50
+
+                # Calcola i pesi
+                w5 = to_5_mask.astype(float)
+                w7 = to_7_mask.astype(float)
+
+                # Applica i trasferimenti
+                moved_to_5 = w5 * total_moved
+                moved_to_7 = w7 * total_moved
+
+                probs[:, cls] -= (moved_to_5 + moved_to_7)
+                probs[:, 5]   += moved_to_5
+                probs[:, 7]   += moved_to_7
+
+                _accumulate("6_to_5_distance_gradient", (moved_to_5 > 0).sum(), transfers)
+                _accumulate("6_to_7_distance_gradient", (moved_to_7 > 0).sum(), transfers)
+
+        # ==========================================
+        # CLASSE 8 -> {7,9,10}
+        # ==========================================
+        cls = 8
+        if cls in self.detectors and cls in anomaly_thresholds and hasattr(self, 'centroids_'):
+            dom = (probs.argmax(axis=1) == cls)
+            anomaly_mask = anomaly_by_cls[cls] > anomaly_thresholds[cls]
+            combined_mask = dom & anomaly_mask
+
+            # quantità da spostare SOLO per campioni anomali
+            total_moved = np.where(combined_mask, alpha * probs[:, cls], 0.0)
+
+            if mean_dist is not None and combined_mask.any():
+                # Percentili calcolati SOLO sui campioni che verranno trasferiti
+                subset_distances = mean_dist[combined_mask]
+                p33 = np.percentile(subset_distances, 33)
+                p66 = np.percentile(subset_distances, 66)
+                
+                # Maschere per ogni destinazione
+                to_7_mask = np.zeros_like(combined_mask, dtype=bool)
+                to_9_mask = np.zeros_like(combined_mask, dtype=bool)
+                to_10_mask = np.zeros_like(combined_mask, dtype=bool)
+                
+                to_7_mask[combined_mask] = mean_dist[combined_mask] <= p33
+                to_9_mask[combined_mask] = (mean_dist[combined_mask] > p33) & (mean_dist[combined_mask] <= p66)
+                to_10_mask[combined_mask] = mean_dist[combined_mask] > p66
+                
+                # Calcola i pesi
+                w7 = to_7_mask.astype(float)
+                w9 = to_9_mask.astype(float)
+                w10 = to_10_mask.astype(float)
+
+                # Applica i trasferimenti
+                moved_to_7  = w7  * total_moved
+                moved_to_9  = w9  * total_moved
+                moved_to_10 = w10 * total_moved
+
+                probs[:, cls] -= (moved_to_7 + moved_to_9 + moved_to_10)
+                probs[:, 7]   += moved_to_7
+                probs[:, 9]   += moved_to_9
+                probs[:, 10]  += moved_to_10
+
+                _accumulate("8_to_7_distance_gradient", (moved_to_7  > 0).sum(), transfers)
+                _accumulate("8_to_9_distance_gradient", (moved_to_9  > 0).sum(), transfers)
+                _accumulate("8_to_10_distance_gradient", (moved_to_10 > 0).sum(), transfers)
+
+        # ==========================================
+        # CLASSE 4 -> {5}
+        # ==========================================
+        cls = 4
+        if cls in self.detectors and cls in anomaly_thresholds:
+            dom = (probs.argmax(axis=1) == cls)
+            anomaly_mask = anomaly_by_cls[cls] > anomaly_thresholds[cls]
+            combined_mask = dom & anomaly_mask
+
+            total_moved = np.where(combined_mask, alpha * probs[:, cls], 0.0)
+
+            probs[:, cls] -= total_moved
+            probs[:, 5]   += total_moved
+
+            _accumulate("4_to_5", (total_moved > 0).sum(), transfers)
+
         return transfers
 
     # --------------------------
