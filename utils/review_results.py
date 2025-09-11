@@ -183,19 +183,3 @@ def plot_submission(df: pd.DataFrame,
 
     plt.show()
     print("✅ Grafici visualizzati.")
-
-def plot_sigmoid(k=1.0, b=0.0):
-    # Genero valori di a
-    a = np.linspace(-1, 3, 500)  
-    # Calcolo la sigmoide
-    sigmoid = 1 / (1 + np.exp(-k * (a - b)))
-    
-    # Plot
-    plt.figure(figsize=(10, 3))
-    plt.plot(a, sigmoid, label=fr"$\sigma(a) = \frac{{1}}{{1+e^{{-k(a-b)}}}}$" + f"\n(k={k}, b={b})")
-    plt.title("Funzione Sigmoide")
-    plt.xlabel("a")
-    plt.ylabel("σ(a)")
-    plt.grid(True, alpha=0.3)
-    plt.legend()
-    plt.show()

@@ -127,11 +127,13 @@ class SubmissionGenerator:
         probs: NDArray,
         X_test: NDArray,
         alpha: float = 0.3,
+        anomaly_threshold: float = 0.5,
     ) -> Dict[str, int]:
         """
         Applica trasferimenti guidati da IsolationForest e KNN globale (4,6,8).
         - niente softmax: pesi normalizzati linearmente
         - quantità spostata = alpha  * prob(source) solo se la source è argmax
+        - anomaly_threshold: soglia esplicita per determinare se un campione è anomalo
         Regole:
         6 -> {5,7}  (somiglianza a 4 → 5, somiglianza a 8 → 7)
         8 -> {7,9,10}  (vicino a 6 → 7, lontano da {4,6} → 9)
@@ -157,13 +159,7 @@ class SubmissionGenerator:
 
         transfers: Dict[str, int] = {}
 
-        # Soglie specifiche per classe
-        anomaly_thresholds = {}
-        for cls in [4, 6, 8]:
-            if cls in anomaly_by_cls:
-                anomaly_thresholds[cls] = np.percentile(anomaly_by_cls[cls], 25)  # CORREZIONE: 75 per top 25%
-
-        print(f"Anomaly thresholds: {anomaly_thresholds}")
+        print(f"Using explicit anomaly threshold: {anomaly_threshold}")
 
         # PRE-CALCOLO distanze dai centroidi (serve per tutte le classi)
         all_distances = []
@@ -180,9 +176,9 @@ class SubmissionGenerator:
         # CLASSE 6 -> {5,7}
         # ==========================================
         cls = 6
-        if cls in self.detectors and cls in anomaly_thresholds and hasattr(self, 'centroids_'):
+        if cls in self.detectors and hasattr(self, 'centroids_'):
             dom = (probs.argmax(axis=1) == cls)
-            anomaly_mask = anomaly_by_cls[cls] > anomaly_thresholds[cls]
+            anomaly_mask = anomaly_by_cls[cls] > anomaly_threshold
             combined_mask = dom & anomaly_mask
 
             # quantità da spostare SOLO per campioni anomali
@@ -218,9 +214,9 @@ class SubmissionGenerator:
         # CLASSE 8 -> {7,9,10}
         # ==========================================
         cls = 8
-        if cls in self.detectors and cls in anomaly_thresholds and hasattr(self, 'centroids_'):
+        if cls in self.detectors and hasattr(self, 'centroids_'):
             dom = (probs.argmax(axis=1) == cls)
-            anomaly_mask = anomaly_by_cls[cls] > anomaly_thresholds[cls]
+            anomaly_mask = anomaly_by_cls[cls] > anomaly_threshold
             combined_mask = dom & anomaly_mask
 
             # quantità da spostare SOLO per campioni anomali
@@ -264,9 +260,9 @@ class SubmissionGenerator:
         # CLASSE 4 -> {5}
         # ==========================================
         cls = 4
-        if cls in self.detectors and cls in anomaly_thresholds:
+        if cls in self.detectors:
             dom = (probs.argmax(axis=1) == cls)
-            anomaly_mask = anomaly_by_cls[cls] > anomaly_thresholds[cls]
+            anomaly_mask = anomaly_by_cls[cls] > anomaly_threshold
             combined_mask = dom & anomaly_mask
 
             total_moved = np.where(combined_mask, alpha * probs[:, cls], 0.0)
@@ -275,6 +271,9 @@ class SubmissionGenerator:
             probs[:, 5]   += total_moved
 
             _accumulate("4_to_5", (total_moved > 0).sum(), transfers)
+
+        row_sums = probs.sum(axis=1, keepdims=True)
+        probs /= np.maximum(row_sums, 1e-12)
 
         return transfers
 
@@ -291,9 +290,16 @@ class SubmissionGenerator:
         conf_thresh: float = 0.6,
         contamination: float = 0.05,
         alpha: float = 0.3,
+        anomaly_threshold: float = 0.5,
     ) -> Tuple[pd.DataFrame, Dict]:
         """
         Genera il DataFrame di submission e le diagnostics.
+
+        Parameters:
+        -----------
+        anomaly_threshold : float, default=0.5
+            Soglia esplicita per determinare se un campione è anomalo.
+            I campioni con anomaly score > anomaly_threshold saranno considerati anomali.
 
         Steps:
           1) (eventuale) scaling per il modello
@@ -328,7 +334,7 @@ class SubmissionGenerator:
 
         # 5) Detector & transfers
         self.build_anomaly_detectors(X_tr, y_tr, contamination)
-        transfers = self.apply_transfers(probs_11, X_test, alpha)
+        transfers = self.apply_transfers(probs_11, X_test, alpha, anomaly_threshold)
 
         probs_final = probs_11
 
@@ -346,6 +352,7 @@ class SubmissionGenerator:
         diagnostics = {
             "detectors_built": list(self.detectors.keys()),
             "transfers": transfers,
+            "anomaly_threshold": float(anomaly_threshold),
             "confidence_stats": {
                 "threshold": float(conf_thresh),
                 "mean_of_max_proba": float(max_proba.mean()),
@@ -365,9 +372,15 @@ class SubmissionGenerator:
         conf_thresh: float = 0.6,
         contamination: float = 0.05,
         alpha: float = 0.3,
+        anomaly_threshold: float = 0.5,
     ) -> Tuple[pd.DataFrame, Dict]:
         """
         Wrapper pratico che prende direttamente test_df con colonna 'id'.
+        
+        Parameters:
+        -----------
+        anomaly_threshold : float, default=0.5
+            Soglia esplicita per determinare se un campione è anomalo.
         """
         return self.generate_submission(
             X_tr=X_tr,
@@ -378,4 +391,5 @@ class SubmissionGenerator:
             conf_thresh=conf_thresh,
             contamination=contamination,
             alpha=alpha,
+            anomaly_threshold=anomaly_threshold,
         )
