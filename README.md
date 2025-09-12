@@ -179,5 +179,10 @@ The project includes comprehensive visualization capabilities:
 ## 🤝 Contributing
 
 
+|Nome | GitHub |
+|-----------|--------|
+| 🔨 `` | [Click here](https://github.com/) |
+| 🪛 `` | [Click here](https://github.com/) |
+| 🪛 `` | [Click here](https://github.com/) |
 
 ---
