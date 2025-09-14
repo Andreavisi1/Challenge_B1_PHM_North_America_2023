@@ -181,8 +181,8 @@ The project includes comprehensive visualization capabilities:
 
 |Nome | GitHub |
 |-----------|--------|
-| 🔨 `` | [Click here](https://github.com/) |
-| 🪛 `` | [Click here](https://github.com/) |
-| 🪛 `` | [Click here](https://github.com/) |
+| 🛩️ `Alessandra D'Anna` | [Click here](https://github.com/Aledanna00) |
+| 🚂 `Walter Di Sabatino` | [Click here](https://github.com/Walter-Di-Sabatino) |
+| 🚕 `Andrea Visi` | [Click here](https://github.com/Andreavisi1) |
 
 ---
