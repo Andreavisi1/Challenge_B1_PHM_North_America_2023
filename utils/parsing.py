@@ -57,8 +57,10 @@ def parse_phm_dataset_comprehensive(dataset_path, n_revolutions=10, max_samples_
                 # Parsing metadati dal filename
                 metadata = parse_filename_metadata(file)
                 if metadata is None:
+                    print(f"❌ File non parsato: {file}")  # <-- aggiungi questa riga
                     parsing_stats['failed_parses'] += 1
                     continue
+
                 
                 # Aggiorna statistiche condizioni
                 condition_key = (metadata['rpm'], metadata['torque'])
