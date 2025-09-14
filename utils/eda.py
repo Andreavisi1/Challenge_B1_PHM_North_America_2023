@@ -79,7 +79,7 @@ def plot_health_level_distribution(df, y):
                       bbox=dict(boxstyle='round', facecolor='red', alpha=0.1))
     
     # 2. Health levels vs RPM
-    pivot_rpm = df.pivot_table(values='file_id', index='health_level', 
+    pivot_rpm = df.pivot_table(values='file_name', index='health_level', 
                               columns='velocita', aggfunc='count', fill_value=0)
     
     sns.heatmap(pivot_rpm, annot=True, fmt='d', cmap='YlOrRd', ax=axes[0,1])
@@ -88,7 +88,7 @@ def plot_health_level_distribution(df, y):
     axes[0,1].set_ylabel('Health Level')
     
     # 3. Health levels vs Torque  
-    pivot_torque = df.pivot_table(values='file_id', index='health_level', 
+    pivot_torque = df.pivot_table(values='file_name', index='health_level', 
                                  columns='torque', aggfunc='count', fill_value=0)
     
     sns.heatmap(pivot_torque, annot=True, fmt='d', cmap='YlGnBu', ax=axes[1,0])
@@ -127,7 +127,7 @@ def plot_operating_conditions_analysis(df):
     fig.suptitle('⚙️ Analisi Condizioni Operative', fontsize=16, fontweight='bold')
     
     # 1. Operating conditions coverage map
-    operating_matrix = df.pivot_table(values='file_id', index='torque', 
+    operating_matrix = df.pivot_table(values='file_name', index='torque', 
                                      columns='velocita', aggfunc='count', fill_value=0)
     
     sns.heatmap(operating_matrix, annot=True, fmt='d', cmap='viridis', ax=axes[0,0])
@@ -321,7 +321,7 @@ def plot_correlation_analysis(X_features, y):
 def outlier_analysis(X_features, y):
     """Detection e analisi outliers"""
     
-    print(f"\n🚨 ANALISI OUTLIERS:")
+    print(f"\nANALISI OUTLIERS:")
     
     # 1. IQR-based outlier detection
     outliers_by_feature = {}
@@ -349,7 +349,7 @@ def outlier_analysis(X_features, y):
     
     # 3. Visualizzazione outliers
     fig, axes = plt.subplots(2, 2, figsize=(15, 12))
-    fig.suptitle('🚨 Analisi Outliers', fontsize=16, fontweight='bold')
+    fig.suptitle('Analisi Outliers', fontsize=16, fontweight='bold')
     
     # Plot 1: Outliers per feature
     features_with_outliers = list(outliers_by_feature.keys())[:10]

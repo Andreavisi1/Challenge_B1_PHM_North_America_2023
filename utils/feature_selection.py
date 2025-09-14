@@ -259,7 +259,7 @@ def visualize_conservative_selection(X_before, X_after, selection_scores, y, fig
     fig = plt.figure(figsize=figsize)
     gs = fig.add_gridspec(3, 4, hspace=0.3, wspace=0.3)
     
-    fig.suptitle('🛡️ Conservative Feature Selection: Multi-Method Approach', 
+    fig.suptitle('Conservative Feature Selection: Multi-Method Approach', 
                  fontsize=16, fontweight='bold')
     
     # === ROW 1: Metodi di selezione ===
