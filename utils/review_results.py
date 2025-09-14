@@ -1,9 +1,6 @@
 # ——————————————————————————————————————————————
-# Analisi e visualizzazione submission (semplice)
+# Analisi e visualizzazione submission
 # ——————————————————————————————————————————————
-# Uso consigliato nel notebook (in una cella separata):
-# %matplotlib inline    # oppure: %matplotlib widget
-
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -11,9 +8,9 @@ import matplotlib.pyplot as plt
 # -------------------------------------------------
 # Parametri di base
 # -------------------------------------------------
-N_CLASSES = 11              # cambia qui se il numero di classi è diverso
+N_CLASSES = 11              
 PROB_COLS = [f"prob_{i}" for i in range(N_CLASSES)]
-CONF_COL = "confidence"     # opzionale: 0/1; se manca, le parti relative vengono saltate
+CONF_COL = "confidence"    
 
 # -------------------------------------------------
 # Analisi testuale
@@ -24,7 +21,6 @@ def analyze_submission(df: pd.DataFrame, prob_cols=PROB_COLS, conf_col=CONF_COL)
     - numero di predizioni
     - normalizzazione delle probabilità (somma ~ 1)
     - distribuzione delle classi previste
-    - (opzionale) statistiche sulla 'confidence' se presente
     Ritorna: y_pred (np.ndarray), prob_sums (pd.Series)
     """
     print("=" * 60)
@@ -80,10 +76,7 @@ def plot_submission(df: pd.DataFrame,
     i grafici che la usano vengono saltati automaticamente.
     - Distribuzione predizioni
     - Probabilità medie per classe
-    - (se presente) Distribuzione confidence
-    - Distribuzione della max probability
-    - Somma probabilità per un sottoinsieme di classi "critiche" (modificabile)
-    - (se presente) Max probability separata per confidence
+    - Max probability separata per confidence
     """
     # Controlli minimi
     missing = [c for c in prob_cols if c not in df.columns]
@@ -135,24 +128,8 @@ def plot_submission(df: pd.DataFrame,
     ax.set_xticks(range(len(prob_cols)))
     ax.grid(True, alpha=0.3)
 
-    # 3) (opzionale) Distribuzione confidence
-    '''if has_conf:
-        conf_counts = df[conf_col].value_counts().sort_index()
-        labels = ['Low', 'High']
-        sizes = [int(conf_counts.get(0, 0)), int(conf_counts.get(1, 0))]
 
-        ax = axes[plot_idx]; plot_idx += 1
-        wedges, texts, autotexts = ax.pie(
-            sizes,
-            labels=labels,
-            autopct=lambda p: f"{p:.1f}%\n({int(p*sum(sizes)/100)})",
-            startangle=90,
-            textprops={'color': "black"}
-        )
-        ax.set_title('Distribuzione Confidence')'''
-
-
-    # 4)Max prob per confidence
+    # 3)Max prob per confidence
     if has_conf:
         hi = df[df[conf_col] == 1][prob_cols].max(axis=1)
         lo = df[df[conf_col] == 0][prob_cols].max(axis=1)

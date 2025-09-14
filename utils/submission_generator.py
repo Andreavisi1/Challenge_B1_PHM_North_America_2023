@@ -14,17 +14,16 @@ class SubmissionGenerator:
     """
     Generatore di submission per competizioni ML.
 
-    Scelte progettuali (SEMPLIFICATE):
-    - Solo k-NN per definire la distanza di un punto da una classe (manifold-aware).
-      Nessun centroide / Mahalanobis, nemmeno come fallback.
+    Scelte progettuali :
+    - K-NN per definire la distanza di un punto da una classe (manifold-aware).
     - Routing per-campione indipendente dal batch:
         * 6 -> {5,7}: TUTTO verso 5 se d_knn(., 4) <= d_knn(., 8), altrimenti TUTTO verso 7.
         * 8 -> {7,9,10}: se vicino a 6 (d_knn(.,6) <= T6) => 7;
                          se lontano da 6 (d_knn(.,6) >= Tfar) => 9;
                          altrimenti => 10.
         * 4 -> 5 (sempre, se anomalo come 4).
-    - Soglie T6 e Tfar derivate SOLO dal TRAIN via k-NN (mediane).
-    - Trasferimento fractionario controllato da `alpha` (es. 0.3).
+    - Soglie T6 e Tfar derivate SOLO dal TRAIN via k-NN.
+    - Trasferimento frazionario controllato da `alpha` (es. 0.3).
     - Confidence binaria semplice su max probability.
     """
 

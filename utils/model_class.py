@@ -300,11 +300,8 @@ class ModelSelectorClassification:
         n_classes = len(self.le.classes_)
         print(f"\n📈 Configurazione modelli per {n_classes} classi totali")
         
-        # IMPORTANTE: Configura XGBoost con il numero corretto di classi
-        self.xgb.named_steps["model"].num_class = n_classes
-        
-        # Per alcuni modelli potrebbe essere necessario configurare parametri aggiuntivi
-        # per gestire classi sbilanciate o mancanti
+        # Configura XGBoost con il numero corretto di classi
+        self.xgb.named_steps["model"].num_class = n_classes    
         
         # Salva dati per uso successivo
         self.X_train = X_train
@@ -474,10 +471,9 @@ class ModelSelectorClassification:
             res = self.evaluate(est, X_val_array, y_val, name, print_cm=False, print_report=False)
             self.val_results.append(res)
             
-            # CORREZIONE: usa y_pred dal risultato di evaluate
-            y_pred = res['y_pred']  # Usa questo invece di ripredire
+            # Usa y_pred dal risultato di evaluate
+            y_pred = res['y_pred']
             
-            # GESTIONE INTELLIGENTE DELLE CLASSI
             pred_classes = sorted(np.unique(y_pred))
             
             # Verifica quali classi il modello conosce
@@ -494,9 +490,8 @@ class ModelSelectorClassification:
             if missing_in_pred:
                 print(f"   ⚠️  Classi MAI predette: {sorted(missing_in_pred)}")
             
-            # CORREZIONE PRINCIPALE: usa solo le classi del validation
-            # Non includere classi spurie che potrebbero apparire nelle predizioni
-            labels_for_matrix = val_classes  # USA SOLO LE CLASSI DEL VALIDATION
+            # Usa solo le classi del validation
+            labels_for_matrix = val_classes  
             
             # Calcola confusion matrix con le classi del validation
             from sklearn.metrics import confusion_matrix
@@ -609,7 +604,7 @@ class ModelSelectorClassification:
         
         # Trova il miglior modello  
         best_idx = np.argmax([r['accuracy'] for r in self.val_results])
-        best_model = self.val_results[best_idx]['name']  # CORREZIONE: usa 'name' non 'model'
+        best_model = self.val_results[best_idx]['name']
         best_acc = self.val_results[best_idx]['accuracy']
         
         print(f"\n🏆 MIGLIOR MODELLO: {best_model}")
