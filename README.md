@@ -18,38 +18,6 @@ This project implements a comprehensive machine learning pipeline for the **PHM 
 - **Anomaly Detection**: Integrated outlier detection for robust predictions
 - **Automated Pipeline**: End-to-end solution from raw data to submission file generation
 
-## 🏗️ Project Structure
-
-```
-phm-america-2023/
-│
-├── 📁 data/
-│   ├── raw/                    # Original PHM2023 dataset
-│   │   └── B - PHM America 2023 - Dataset/
-│   │       ├── Data_Challenge_PHM2023_training_data/
-│   │       └── Data_Challenge_PHM2023_test_data/
-│   └── processed/              # Processed data files
-│       ├── train_data.pkl
-│       ├── test_data.pkl
-│       ├── train_data_dowsampled.pkl
-│       └── X_with_features.pkl
-│
-├── 📁 utils/
-│   ├── parsing.py              # Data parsing utilities
-│   ├── downsampling.py         # Signal downsampling functions
-│   ├── feature_extraction.py   # Feature engineering pipeline
-│   ├── model_class.py          # Model selection framework
-│   ├── submission_generator.py # Competition submission creation
-│   └── review_results.py       # Results analysis tools
-│
-├── 📁 models/                  # Saved trained models
-│   └── best_model_classification_*.joblib
-│
-├── 📓 main.ipynb              # Main analysis notebook
-├── 📄 submission.csv          # Final submission file
-└── 📄 README.md               # Project documentation
-```
-
 ## 🚀 Getting Started
 
 ### Prerequisites
