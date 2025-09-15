@@ -43,7 +43,7 @@ cd phm-america-2023
 
 3. Run the main pipeline:
 ```bash
-jupyter notebook main.ipynb
+jupyter notebook notebooks/*.ipynb
 ```
 
 ## 📊 Pipeline Workflow
