@@ -35,7 +35,7 @@ pip install pandas numpy scikit-learn joblib matplotlib seaborn
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/phm-america-2023.git
+git clone https://github.com/andreavisi1/phm-america-2023.git
 cd phm-america-2023
 ```
 
